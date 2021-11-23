@@ -1,0 +1,107 @@
+// Microsoft Visual C++ generated resource script.
+//
+#include "resource.h"
+
+#define APSTUDIO_READONLY_SYMBOLS
+/////////////////////////////////////////////////////////////////////////////
+//
+// Generated from the TEXTINCLUDE 2 resource.
+//
+#include "winres.h"
+/////////////////////////////////////////////////////////////////////////////
+#undef APSTUDIO_READONLY_SYMBOLS
+
+/////////////////////////////////////////////////////////////////////////////
+// English (U.S.) resources
+
+#if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_ENU)
+#ifdef _WIN32
+LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
+#pragma code_page(1252)
+#endif //_WIN32
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Dialog
+//
+
+IDD_DIALOG1 DIALOGEX 0, 0, 477, 314
+STYLE DS_SETFONT | DS_MODALFRAME | DS_3DLOOK | DS_FIXEDSYS | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "BTH Demo"
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    EDITTEXT        IDC_EDIT2,70,37,390,14,ES_AUTOHSCROLL | WS_DISABLED
+    PUSHBUTTON      "Connect To",IDC_BUTTON1,15,106,50,14,WS_DISABLED
+    PUSHBUTTON      "Send",IDC_BUTTON2,15,37,50,14,WS_DISABLED
+    EDITTEXT        IDC_EDIT3,7,159,463,148,ES_MULTILINE | ES_AUTOVSCROLL | ES_AUTOHSCROLL | WS_VSCROLL
+    GROUPBOX        "Server:",IDC_STATIC1,7,7,463,53
+    PUSHBUTTON      "Disconnect",IDC_BUTTON3,160,18,50,14,WS_DISABLED
+    LTEXT           "Client ID =",IDC_STATIC3,15,21,109,8
+    GROUPBOX        "Client: Disconnected",IDC_STATIC2,7,89,463,60
+    PUSHBUTTON      "Disconnect",IDC_BUTTON4,160,106,50,14,WS_DISABLED
+    PUSHBUTTON      "Send",IDC_BUTTON5,15,127,50,14,WS_DISABLED
+    EDITTEXT        IDC_EDIT4,70,127,390,14,WS_DISABLED
+    COMBOBOX        IDC_COMBO1,7,70,463,30,CBS_DROPDOWNLIST | WS_DISABLED | WS_VSCROLL | WS_TABSTOP
+    PUSHBUTTON      "Start",IDC_BUTTON6,215,18,50,14,WS_DISABLED
+    PUSHBUTTON      "Stop",IDC_BUTTON7,270,18,50,14,WS_DISABLED
+    PUSHBUTTON      "Discovery",IDC_BUTTON8,221,106,50,14,WS_DISABLED
+    COMBOBOX        IDC_COMBO2,70,107,87,30,CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+END
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// DESIGNINFO
+//
+
+#ifdef APSTUDIO_INVOKED
+GUIDELINES DESIGNINFO 
+BEGIN
+    IDD_DIALOG1, DIALOG
+    BEGIN
+        LEFTMARGIN, 7
+        RIGHTMARGIN, 470
+        TOPMARGIN, 7
+        BOTTOMMARGIN, 307
+    END
+END
+#endif    // APSTUDIO_INVOKED
+
+
+#ifdef APSTUDIO_INVOKED
+/////////////////////////////////////////////////////////////////////////////
+//
+// TEXTINCLUDE
+//
+
+1 TEXTINCLUDE 
+BEGIN
+    "resource.\0"
+END
+
+2 TEXTINCLUDE 
+BEGIN
+    "#include ""winres.h""\0"
+END
+
+3 TEXTINCLUDE 
+BEGIN
+    "#include "".rc2\0"
+END
+
+#endif    // APSTUDIO_INVOKED
+
+#endif    // English (U.S.) resources
+/////////////////////////////////////////////////////////////////////////////
+
+
+
+#ifndef APSTUDIO_INVOKED
+/////////////////////////////////////////////////////////////////////////////
+//
+// Generated from the TEXTINCLUDE 3 resource.
+//
+#include ".rc2"
+/////////////////////////////////////////////////////////////////////////////
+#endif    // not APSTUDIO_INVOKED
+
