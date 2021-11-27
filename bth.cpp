@@ -59,18 +59,73 @@ NTSTATUS SyncIoctl(_In_ HANDLE FileHandle,
 
 struct __declspec(uuid("00112233-4455-6677-8899-aabbccddeeff")) MyServiceClass;
 
-ULONG RegisterService(_In_ UCHAR Port, _In_ WSAESETSERVICEOP essoperation, _Inout_ HANDLE* pRecordHandle);
+NTSTATUS UnregisterService(_In_ HANDLE hDevice, _In_ HANDLE_SDP hRecord)
+{
+	return SyncIoctl(hDevice, IOCTL_BTH_SDP_REMOVE_RECORD, &hRecord, sizeof(hRecord), 0, 0);
+}
+
+NTSTATUS RegisterService(_In_ HANDLE hDevice, _In_ UCHAR Port, _Out_ PHANDLE_SDP phRecord)
+{
+	const static UCHAR SdpRecordTmplt[] = {
+		// [//////////////////////////////////////////////////////////////////////////////////////////////////////////
+		0x35, 0x33,																									//
+		//
+		// UINT16:SDP_ATTRIB_CLASS_ID_LIST																			//
+		0x09, 0x00, 0x01,																							//
+		//		[/////////////////////////////////////////////////////////////////////////////////////////////////	//
+		0x35, 0x11,																								//	//
+		// UUID128:{guid}																						//	//
+		0x1c, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,	//	//
+		//		]/////////////////////////////////////////////////////////////////////////////////////////////////	//
+		//
+		// UINT16:SDP_ATTRIB_PROTOCOL_DESCRIPTOR_LIST																//
+		0x09, 0x00, 0x04,																							//
+		//		[/////////////////////////////////																	//
+		0x35, 0x0f,								//																	//
+		// (L2CAP, PSM=PSM_RFCOMM)				//																	//
+		//			[/////////////////////////	//																	//
+		0x35, 0x06,							//	//																	//
+		// UUID16:L2CAP_PROTOCOL_UUID16		//	//																	//
+		0x19, 0x01, 0x00,					//	//																	//
+		// UINT16:PSM_RFCOMM				//	//																	//
+		0x09, 0x00, 0x03,					//	//																	//
+		//			]/////////////////////////	//																	//
+		// (RFCOMM, CN=Port)					//																	//
+		//			[/////////////////////////	//																	//
+		0x35, 0x05,							//	//																	//
+		// UUID16:RFCOMM_PROTOCOL_UUID16	//	//																	//
+		0x19, 0x00, 0x03,					//	//																	//
+		// UINT8:CN							//	//																	//
+		0x08, 0x33,							//	//																	//
+		//			]/////////////////////////	//																	//
+		//		]/////////////////////////////////																	//
+		//
+		// UINT16:SDP_ATTRIB_SERVICE_NAME																			//
+		0x09, 0x01, 0x00,																							//
+		// STR:4 "VSCR"																								//
+		0x25, 0x04, 0x56, 0x53, 0x43, 0x52																			//
+		// ]//////////////////////////////////////////////////////////////////////////////////////////////////////////
+	};
+
+	UCHAR SdpRecord[sizeof(SdpRecordTmplt)];
+
+	memcpy(SdpRecord, SdpRecordTmplt, sizeof(SdpRecordTmplt));
+	SdpRecord[43] = Port;
+
+	return SyncIoctl(hDevice, IOCTL_BTH_SDP_SUBMIT_RECORD, SdpRecord, sizeof(SdpRecord), phRecord, sizeof(HANDLE_SDP));
+}
 
 class BtDlg : public ZDlg, ELog, LIST_ENTRY
 {
 	BTH_ADDR _btAddr;
-	HANDLE _recordHandle = 0;
+	HANDLE_SDP _recordHandle = 0;
 	BthSocket* _ps = 0, *_pc = 0;
 	HDEVNOTIFY _HandleV = 0;
 	HWND _hwndServerList, _hwndAddress;
 	ULONG _port;
 	ULONG _n = 0;
 	ULONG _DevLockCount = 0;
+	ULONG _index = 0;
 
 	enum {
 		ID_S_STATUS = IDC_STATIC1,
@@ -100,6 +155,7 @@ class BtDlg : public ZDlg, ELog, LIST_ENTRY
 		BTH_ADDR btAddr = 0;
 		HANDLE _hDevice = 0;
 		ULONG hash = 0;
+		ULONG index;
 
 		~BTH_PORT()
 		{
@@ -112,9 +168,23 @@ class BtDlg : public ZDlg, ELog, LIST_ENTRY
 
 		BTH_PORT(PLIST_ENTRY head)
 		{
+			static LONG s_index;
+			index = InterlockedIncrementNoFence(&s_index);
 			InsertTailList(head, this);
 		}
 	};
+
+	void ClosePorts()
+	{
+		PLIST_ENTRY head = this, entry = head->Blink;
+		while (entry != head)
+		{
+			BTH_PORT* port = static_cast<BTH_PORT*>(entry);
+			entry = entry->Blink;
+
+			delete port;
+		}
+	}
 
 	struct HCI_REQUEST : IO_STATUS_BLOCK 
 	{
@@ -192,7 +262,7 @@ class BtDlg : public ZDlg, ELog, LIST_ENTRY
 		}
 	}
 
-	ULONG StartServer(HWND hwndDlg, CSocketObject* pAddress, _Out_ PCWSTR& fmt, _In_opt_ BTH_ADDR btAddr = 0)
+	ULONG StartServer(HWND hwndDlg, _In_ HANDLE hDevice, CSocketObject* pAddress, _Out_ PCWSTR& fmt, _In_opt_ BTH_ADDR btAddr = 0)
 	{
 		SOCKADDR_BTH asi = { AF_BTH, btAddr, {}, BT_PORT_ANY };
 
@@ -233,7 +303,7 @@ class BtDlg : public ZDlg, ELog, LIST_ENTRY
 							int ids[] = { -ID_START, ID_STOP };
 							EnableControls(hwndDlg, ids, _countof(ids));
 
-							RegisterService((UCHAR)asi.port, RNRSERVICE_REGISTER, &_recordHandle);
+							RegisterService(hDevice, (UCHAR)asi.port, &_recordHandle);
 
 							*this << L"Listening ...\r\n";
 
@@ -255,7 +325,7 @@ class BtDlg : public ZDlg, ELog, LIST_ENTRY
 		{
 			PCWSTR fmt;
 
-			if (ULONG dwError = StartServer(hwndDlg, pAddress, fmt, btAddr))
+			if (ULONG dwError = StartServer(hwndDlg, hDevice, pAddress, fmt, btAddr))
 			{			
 				*this << fmt << dwError;
 			}
@@ -305,6 +375,20 @@ class BtDlg : public ZDlg, ELog, LIST_ENTRY
 		if (BTH_PORT* port = GetSelectedPort())
 		{
 			return port->_hDevice;
+		}
+
+		return 0;
+	}
+
+	HANDLE GetDevice(ULONG index)
+	{
+		PLIST_ENTRY head = this, entry = head;
+		while ((entry = entry->Blink) != head)
+		{
+			if (static_cast<BTH_PORT*>(entry)->index == index)
+			{
+				return static_cast<BTH_PORT*>(entry)->_hDevice;
+			}
 		}
 
 		return 0;
@@ -580,6 +664,8 @@ class BtDlg : public ZDlg, ELog, LIST_ENTRY
 		{
 			UnregisterDeviceNotification(HandleV);
 		}
+
+		ClosePorts();
 	}
 
 	void Add(_In_ HWND hwndDlg, _In_ PCWSTR pszDeviceInterface)
@@ -652,7 +738,10 @@ class BtDlg : public ZDlg, ELog, LIST_ENTRY
 	{
 		if (BthSocket* ps = _ps)
 		{
-			RegisterService((UCHAR)_port, RNRSERVICE_DELETE, &_recordHandle);
+			if (HANDLE hDevice = GetDevice(_index))
+			{
+				UnregisterService(hDevice, _recordHandle);
+			}
 
 			ps->Close();
 			ps->Release();
@@ -1065,6 +1154,7 @@ __0:
 				{
 					if (BTH_PORT* port = GetSelectedPort())
 					{
+						_index = port->index;
 						StartServer(hwndDlg, port->_hDevice, port->btAddr);
 					}
 				}
@@ -1121,6 +1211,7 @@ void bthDlg()
 
 void Install();
 BOOL BuildSdp(USHORT Psm, UCHAR Cn);
+void L2Test();
 
 void CALLBACK ep(void*)
 {
@@ -1128,6 +1219,7 @@ void CALLBACK ep(void*)
 	//if (IsDebuggerPresent())Install();
 
 	initterm();
+	L2Test();
 	bthDlg();
 	IO_RUNDOWN::g_IoRundown.BeginRundown();
 	destroyterm();

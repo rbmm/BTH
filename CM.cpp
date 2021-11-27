@@ -81,4 +81,52 @@ CONFIGRET GetFriendlyName(_Out_ PWSTR* ppszName, _In_ PCWSTR pszDeviceInterface)
 	return cr;
 }
 
+ULONG OpenDevice(_Out_ PHANDLE phFile, _In_ const GUID* InterfaceClassGuid)
+{
+	CONFIGRET cr;
+	ULONG cb = 0, rcb;
+	union {
+		PVOID buf;
+		PZZWSTR Buffer;
+	};
+
+	PVOID stack = alloca(guz);
+	do 
+	{
+		cr = CM_Get_Device_Interface_List_SizeW(&rcb, const_cast<GUID*>(InterfaceClassGuid), 0, CM_GET_DEVICE_INTERFACE_LIST_PRESENT);
+
+		if (cr != CR_SUCCESS)
+		{
+			break;
+		}
+
+		if (cb < (rcb *= sizeof(WCHAR)))
+		{
+			cb = RtlPointerToOffset(buf = alloca(rcb - cb), stack);
+		}
+
+		cr = CM_Get_Device_Interface_ListW(const_cast<GUID*>(InterfaceClassGuid), 
+			0, Buffer, cb, CM_GET_DEVICE_INTERFACE_LIST_PRESENT);
+
+	} while (cr == CR_BUFFER_SMALL);
+
+	if (cr == CR_SUCCESS)
+	{
+		while (*Buffer)
+		{
+			HANDLE hFile = CreateFileW(Buffer, 0, 0, 0, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, 0);
+			if (hFile != INVALID_HANDLE_VALUE)
+			{
+				*phFile = hFile;
+				return NOERROR;
+			}
+			Buffer += wcslen(Buffer) + 1;
+		}
+
+		return ERROR_GEN_FAILURE;
+	}
+
+	return CM_MapCrToWin32Err(cr, ERROR_GEN_FAILURE);
+}
+
 _NT_END
