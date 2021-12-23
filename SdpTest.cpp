@@ -20,7 +20,9 @@ BOOL BuildSdp(USHORT Psm, UCHAR Cn)
 		InitNodeUuid(&rf_uuid, sizeof(UINT16), RFCOMM_PROTOCOL_UUID16)), 
 		InitNodeUint(&rf_cn, sizeof(UINT8), Cn));
 
-	AppendNode(AppendNode(InitNodeSequence(&DescriptorList), &L2cap), &rfcomm);
+
+	AppendNode(InitNodeSequence(&DescriptorList), &L2cap);
+	//AppendNode(, &rfcomm);
 
 	AppendNode(InitNodeSequence(&ClassList), InitNodeUuid(&guid, &__uuidof(MyServiceClass)));
 

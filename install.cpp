@@ -76,10 +76,10 @@ NTSTATUS AddRegistry(_In_ const GUID * pClassGuid, _In_ const _BLUETOOTH_LOCAL_S
 		oa.ObjectName = const_cast<PUNICODE_STRING>(&_0_);
 		HANDLE hKey = 0;
 		STATIC_UNICODE_STRING_(PnpInstanceCounter);
-		static const ULONG Counter = 1, Instance = 0;
+		static const ULONG Instance = 0;
 
 		0 <= (status = ZwSetValueKey(oa.RootDirectory, 
-			const_cast<PUNICODE_STRING>(&PnpInstanceCounter), 0, REG_DWORD, const_cast<ULONG*>(&Counter), sizeof(ULONG))) &&
+			const_cast<PUNICODE_STRING>(&PnpInstanceCounter), 0, REG_DWORD, const_cast<ULONG*>(&Instance), sizeof(ULONG))) &&
 			0 <= (status = ZwCreateKey(&hKey, KEY_ALL_ACCESS, &oa, 0, 0, 0, 0));
 
 		NtClose(oa.RootDirectory);
@@ -152,7 +152,7 @@ HRESULT SetupDrv(_In_ const GUID * pClassGuid, _In_ const _BLUETOOTH_LOCAL_SERVI
 			__debugbreak();
 			if (hFile != INVALID_HANDLE_VALUE)
 			{
-				/*ULONG dwError = */BluetoothSetLocalServiceInfo(hFile, pClassGuid, 0, SvcInfo);
+				/*ULONG dwError = */BluetoothSetLocalServiceInfo(hFile, pClassGuid, 0x33, SvcInfo);
 				NtClose(hFile);
 
 			}
@@ -166,14 +166,14 @@ HRESULT SetupDrv(_In_ const GUID * pClassGuid, _In_ const _BLUETOOTH_LOCAL_SERVI
 void Install()
 {
 	__debugbreak();
-	_BLUETOOTH_LOCAL_SERVICE_INFO SvcInfo = { TRUE, {}, L"BthCli", L"Client L2CAP"};
+	_BLUETOOTH_LOCAL_SERVICE_INFO SvcInfo = { TRUE, {}, L"BthScr", L"SC L2CAP"};
 
 	int i;
 	HANDLE hKey;
-	STATIC_OBJECT_ATTRIBUTES(oa, "\\registry\\MACHINE\\SYSTEM\\CurrentControlSet\\Services\\BthCli");
+	STATIC_OBJECT_ATTRIBUTES(oa, "\\registry\\MACHINE\\SYSTEM\\CurrentControlSet\\Services\\BthScr");
 	STATIC_UNICODE_STRING_(INF);
 
-	if (NOERROR == InstallInf(L"C:\\echo\\BthCli.inf", &i))
+	if (NOERROR == InstallInf(L"C:\\echo\\BthScr.inf", &i))
 	{
 		if (0 <= ZwCreateKey(&hKey, KEY_WRITE, &oa, 0, 0, 0, 0))
 		{
@@ -181,12 +181,12 @@ void Install()
 			NtClose(hKey);
 		}
 
-		SetupDrv(&__uuidof(BTHECHOSAMPLE_CLI_GUID), &SvcInfo);
+		SetupDrv(&__uuidof(BTHECHOSAMPLE_SVC_GUID), &SvcInfo);
 	}
 
 	__debugbreak();
 	SvcInfo.Enabled = FALSE;
-	SetupDrv(&__uuidof(BTHECHOSAMPLE_CLI_GUID), &SvcInfo);
+	SetupDrv(&__uuidof(BTHECHOSAMPLE_SVC_GUID), &SvcInfo);
 
 	if (0 <= ZwOpenKey(&hKey, KEY_READ, &oa))
 	{

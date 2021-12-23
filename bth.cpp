@@ -8,124 +8,23 @@ _NT_BEGIN
 #include "elog.h"
 #include "socket.h"
 #include "sdp.h"
+#include "BthDlg.h"
+#include "BthRequest.h"
+#include "util.h"
+#include "cm.h"
+
 extern volatile const UCHAR guz = 0;
 
-CONFIGRET GetFriendlyName(_Out_ PWSTR* ppszName, _In_ PCWSTR pszDeviceInterface);
-
-HRESULT GetLastErrorEx(ULONG dwError = GetLastError())
+class BtDlg : public BthDlg
 {
-	NTSTATUS status = RtlGetLastNtStatus();
-	return dwError == RtlNtStatusToDosErrorNoTeb(status) ? HRESULT_FROM_NT(status) : HRESULT_FROM_WIN32(dwError);
-}
-
-
-#define IOCTL_BTH_HCI_INQUIRE					BTH_CTL(BTH_IOCTL_BASE+0x400)
-#define IOCTL_BTH_ENABLE_DISCOVERY				BTH_CTL(BTH_IOCTL_BASE+0x408)
-#define IOCTL_BTH_GET_LOCALSERVICES				BTH_CTL(BTH_IOCTL_BASE+0x411)
-#define IOCTL_BTH_GET_LOCALSERVICEINFO			BTH_CTL(BTH_IOCTL_BASE+0x412)
-#define IOCTL_BTH_SET_LOCALSERVICEINFO			BTH_CTL(BTH_IOCTL_BASE+0x413)
-
-// BTH_CTL(BTH_IOCTL_BASE+0x411) >>> HCI_GetLocalServices
-// BTH_CTL(BTH_IOCTL_BASE+0x412) >>> HCI_GetLocalServiceInfo
-// BTH_CTL(BTH_IOCTL_BASE+0x413) >>> HCI_SetLocalServiceInfo
-
-NTSTATUS SyncIoctl(_In_ HANDLE FileHandle, 
-				   _In_ ULONG IoControlCode,
-				   _In_reads_bytes_opt_(InputBufferLength) PVOID InputBuffer,
-				   _In_ ULONG InputBufferLength,
-				   _Out_writes_bytes_opt_(OutputBufferLength) PVOID OutputBuffer,
-				   _In_ ULONG OutputBufferLength,
-				   _Out_opt_ PULONG_PTR Information = 0)
-{
-	IO_STATUS_BLOCK iosb;
-
-	NTSTATUS status = NtDeviceIoControlFile(FileHandle, 0, 0, 0, &iosb, IoControlCode, 
-		InputBuffer, InputBufferLength, OutputBuffer, OutputBufferLength);
-
-	if (status == STATUS_PENDING)
-	{
-		if (WaitForSingleObject(FileHandle, INFINITE) != WAIT_OBJECT_0) __debugbreak();
-		status = iosb.Status;
-	}
-
-	if (Information)
-	{
-		*Information = iosb.Information;
-	}
-
-	return status;
-}
-
-
-struct __declspec(uuid("00112233-4455-6677-8899-aabbccddeeff")) MyServiceClass;
-
-NTSTATUS UnregisterService(_In_ HANDLE hDevice, _In_ HANDLE_SDP hRecord)
-{
-	return SyncIoctl(hDevice, IOCTL_BTH_SDP_REMOVE_RECORD, &hRecord, sizeof(hRecord), 0, 0);
-}
-
-NTSTATUS RegisterService(_In_ HANDLE hDevice, _In_ UCHAR Port, _Out_ PHANDLE_SDP phRecord)
-{
-	const static UCHAR SdpRecordTmplt[] = {
-		// [//////////////////////////////////////////////////////////////////////////////////////////////////////////
-		0x35, 0x33,																									//
-		//
-		// UINT16:SDP_ATTRIB_CLASS_ID_LIST																			//
-		0x09, 0x00, 0x01,																							//
-		//		[/////////////////////////////////////////////////////////////////////////////////////////////////	//
-		0x35, 0x11,																								//	//
-		// UUID128:{guid}																						//	//
-		0x1c, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,	//	//
-		//		]/////////////////////////////////////////////////////////////////////////////////////////////////	//
-		//
-		// UINT16:SDP_ATTRIB_PROTOCOL_DESCRIPTOR_LIST																//
-		0x09, 0x00, 0x04,																							//
-		//		[/////////////////////////////////																	//
-		0x35, 0x0f,								//																	//
-		// (L2CAP, PSM=PSM_RFCOMM)				//																	//
-		//			[/////////////////////////	//																	//
-		0x35, 0x06,							//	//																	//
-		// UUID16:L2CAP_PROTOCOL_UUID16		//	//																	//
-		0x19, 0x01, 0x00,					//	//																	//
-		// UINT16:PSM_RFCOMM				//	//																	//
-		0x09, 0x00, 0x03,					//	//																	//
-		//			]/////////////////////////	//																	//
-		// (RFCOMM, CN=Port)					//																	//
-		//			[/////////////////////////	//																	//
-		0x35, 0x05,							//	//																	//
-		// UUID16:RFCOMM_PROTOCOL_UUID16	//	//																	//
-		0x19, 0x00, 0x03,					//	//																	//
-		// UINT8:CN							//	//																	//
-		0x08, 0x33,							//	//																	//
-		//			]/////////////////////////	//																	//
-		//		]/////////////////////////////////																	//
-		//
-		// UINT16:SDP_ATTRIB_SERVICE_NAME																			//
-		0x09, 0x01, 0x00,																							//
-		// STR:4 "VSCR"																								//
-		0x25, 0x04, 0x56, 0x53, 0x43, 0x52																			//
-		// ]//////////////////////////////////////////////////////////////////////////////////////////////////////////
-	};
-
-	UCHAR SdpRecord[sizeof(SdpRecordTmplt)];
-
-	memcpy(SdpRecord, SdpRecordTmplt, sizeof(SdpRecordTmplt));
-	SdpRecord[43] = Port;
-
-	return SyncIoctl(hDevice, IOCTL_BTH_SDP_SUBMIT_RECORD, SdpRecord, sizeof(SdpRecord), phRecord, sizeof(HANDLE_SDP));
-}
-
-class BtDlg : public ZDlg, ELog, LIST_ENTRY
-{
+	ELog log;
 	BTH_ADDR _btAddr;
 	HANDLE_SDP _recordHandle = 0;
 	BthSocket* _ps = 0, *_pc = 0;
-	HDEVNOTIFY _HandleV = 0;
-	HWND _hwndServerList, _hwndAddress;
+	HWND _hwndAddress;
+	PBTH_DEVICE_INFO_LIST _pList = 0;
 	ULONG _port;
-	ULONG _n = 0;
-	ULONG _DevLockCount = 0;
-	ULONG _index = 0;
+	LONG _dwInquireCount = 0;
 
 	enum {
 		ID_S_STATUS = IDC_STATIC1,
@@ -150,121 +49,89 @@ class BtDlg : public ZDlg, ELog, LIST_ENTRY
 		ID_SDB = IDC_BUTTON9
 	};
 
-	struct BTH_PORT : LIST_ENTRY
+	void OnPortRemoved(BTH_RADIO* port, BthSocket** ppSocket)
 	{
-		BTH_ADDR btAddr = 0;
-		HANDLE _hDevice = 0;
-		ULONG hash = 0;
-		ULONG index;
-
-		~BTH_PORT()
+		if (BthSocket* pSocket = *ppSocket)
 		{
-			RemoveEntryList(this);
-			if (HANDLE hDevice = _hDevice)
+			if (pSocket->get_id() == port->_id)
 			{
-				NtClose(hDevice);
-			}
-		}
-
-		BTH_PORT(PLIST_ENTRY head)
-		{
-			static LONG s_index;
-			index = InterlockedIncrementNoFence(&s_index);
-			InsertTailList(head, this);
-		}
-	};
-
-	void ClosePorts()
-	{
-		PLIST_ENTRY head = this, entry = head->Blink;
-		while (entry != head)
-		{
-			BTH_PORT* port = static_cast<BTH_PORT*>(entry);
-			entry = entry->Blink;
-
-			delete port;
-		}
-	}
-
-	struct HCI_REQUEST : IO_STATUS_BLOCK 
-	{
-		HWND hwnd;
-		ULONG code;
-		ULONG time;
-		BTH_ADDR btAddr;
-		ULONGLONG hConnection;
-		ULONG Data[];
-
-		enum { c_inq = 'GIAC', c_cnt = 'TCNC', c_srh = 'HCRS', c_dsc = 'TCSD', c_atr = 'RTTA'};
-
-		HCI_REQUEST(HWND hwnd, ULONG code) : hwnd(hwnd), code(code), time(GetTickCount()) {}
-
-		void OnIoEnd()
-		{
-			if (HWND hWnd = hwnd)
-			{
-				if (PostMessageW(hWnd, WM_BTH, code, (LPARAM)this))
+				if (HANDLE_SDP hRecord = _recordHandle)
 				{
-					return ;
+					UnregisterService(port->_hDevice, hRecord);
+					_recordHandle = 0;
 				}
+
+				pSocket->Close();
+				pSocket->Release();
+				*ppSocket = 0;
 			}
-			delete this;
 		}
+	}
 
-		void* operator new(size_t s, ULONG ex = 0)
-		{
-			return LocalAlloc(0, s + ex);
-		}
+	virtual void OnPortRemoved(BTH_RADIO* port)
+	{
+		log(L"--[%I64X]\r\n", port->_btAddr);
 
-		void operator delete(void* pv)
-		{
-			LocalFree(pv);
-		}
+		OnPortRemoved(port, &_ps);
+		OnPortRemoved(port, &_pc);
+	}
 
-		static VOID NTAPI OnBthComplete(
-			_In_ NTSTATUS /*status*/,
-			_In_ ULONG_PTR /*Information*/,
-			_In_ PVOID Context
-			)
-		{
-			reinterpret_cast<HCI_REQUEST*>(Context)->OnIoEnd();
-		}
+	virtual void OnAnyBthExist(HWND hwndDlg, BOOL b)
+	{
+		const int ids_1[] = {  ID_START,  ID_CONNECT,  ID_TO_ADDRESS,  ID_LIST,  ID_DISCOVERY };
+		const int ids_0[] = { -ID_START, -ID_CONNECT, -ID_TO_ADDRESS, -ID_LIST, -ID_DISCOVERY };
+		EnableControls(hwndDlg, b ? ids_1 : ids_0, _countof(ids_0));
+	}
 
-		void CheckStatus(NTSTATUS status)
+	virtual ULONG GetComboId()
+	{
+		return ID_LIST;
+	}
+
+	virtual void OnBthArrival(_In_ PCWSTR pszDeviceInterface)
+	{
+		log(L"++ %s\r\n", pszDeviceInterface);
+	}
+
+	virtual void OnBthRemoval(_In_ PCWSTR pszDeviceInterface)
+	{
+		log(L"-- %s\r\n", pszDeviceInterface);
+	}
+
+	virtual void OnNewRadio(_In_ BTH_RADIO* port, _In_ PCWSTR pszName)
+	{
+		log(L"++ [%I64X] %s\r\n", port->_btAddr, pszName);
+	}
+
+	void LockInquire(HWND hwndDlg)
+	{
+		if (!_dwInquireCount++)
 		{
-			if (NT_ERROR(status))
+			EnableWindow(GetDlgItem(hwndDlg, ID_DISCOVERY), FALSE);
+			EnableWindow(GetDlgItem(hwndDlg, ID_CONNECT), TRUE);
+
+			ComboBox_ResetContent(_hwndAddress);
+			if (PBTH_DEVICE_INFO_LIST pList = _pList)
 			{
-				Status = status;
-				Information = 0;
-				OnBthComplete(status, 0, this);
+				LocalFree(pList);
+				_pList = 0;
 			}
 		}
+	}
 
-		ULONG GetIoTime()
-		{
-			return GetTickCount() - time;
-		}
-	};
-
-	void LockDev()
+	void UnlockInquire(HWND hwndDlg)
 	{
-		if (!_DevLockCount++)
+		if (!--_dwInquireCount)
 		{
-			EnableWindow(_hwndServerList, FALSE);
+			EnableWindow(GetDlgItem(hwndDlg, ID_DISCOVERY), TRUE);
+
+			log(L"... Inquire\r\n");
 		}
 	}
 
-	void UnlockDev()
+	HRESULT StartServer(HWND hwndDlg, CSocketObject* pAddress, _Out_ PCWSTR& fmt, BTH_RADIO* port)
 	{
-		if (!--_DevLockCount)
-		{
-			EnableWindow(_hwndServerList, TRUE);
-		}
-	}
-
-	ULONG StartServer(HWND hwndDlg, _In_ HANDLE hDevice, CSocketObject* pAddress, _Out_ PCWSTR& fmt, _In_opt_ BTH_ADDR btAddr = 0)
-	{
-		SOCKADDR_BTH asi = { AF_BTH, btAddr, {}, BT_PORT_ANY };
+		SOCKADDR_BTH asi = { AF_BTH, port->_btAddr, {}, BT_PORT_ANY };
 
 		fmt = L"!! Create Address:\r\n";
 
@@ -280,7 +147,7 @@ class BtDlg : public ZDlg, ELog, LIST_ENTRY
 
 			if (dwError == NOERROR)
 			{
-				if (BthSocket* p = new BthSocket(BthSocket::t_server, hwndDlg, "server", pAddress))
+				if (BthSocket* p = new BthSocket(BthSocket::t_server, hwndDlg, port->_id, "server", pAddress))
 				{
 					fmt = L"!! Create Socket:\r\n";
 
@@ -303,11 +170,16 @@ class BtDlg : public ZDlg, ELog, LIST_ENTRY
 							int ids[] = { -ID_START, ID_STOP };
 							EnableControls(hwndDlg, ids, _countof(ids));
 
-							RegisterService(hDevice, (UCHAR)asi.port, &_recordHandle);
+							NTSTATUS status = RegisterService(port->_hDevice, &__uuidof(MyServiceClass),(UCHAR)asi.port, &_recordHandle);
 
-							*this << L"Listening ...\r\n";
+							log(L"RegisterService()=%I64X, %x\r\n", _recordHandle, status);
+							
+							if (0 <= status)
+							{
+								port->EnableScan();
+							}
 
-							return NOERROR;
+							return HRESULT_FROM_NT(status);
 						}
 					}
 
@@ -316,55 +188,29 @@ class BtDlg : public ZDlg, ELog, LIST_ENTRY
 			}
 		}
 
-		return dwError;
+		return HRESULT_FROM_WIN32(dwError);
 	}
 
-	void StartServer(HWND hwndDlg, _In_ HANDLE hDevice, _In_opt_ BTH_ADDR btAddr = 0)
+	void StartServer(HWND hwndDlg, BTH_RADIO* port)
 	{
 		if (CSocketObject* pAddress = new CSocketObject)
 		{
 			PCWSTR fmt;
 
-			if (ULONG dwError = StartServer(hwndDlg, hDevice, pAddress, fmt, btAddr))
+			HRESULT hr = StartServer(hwndDlg, pAddress, fmt, port);
+			if (0 > hr)
 			{			
-				*this << fmt << dwError;
+				log << fmt << hr;
 			}
-			else
-			{
-				//BthServEnableDiscovery(hDevice, TRUE);
-				if (HCI_REQUEST* p = new HCI_REQUEST(0, 0))
-				{
-					ULONG u = 0x00010103;
-					p->CheckStatus(NtDeviceIoControlFile(hDevice, 0, 0, p, p, IOCTL_BTH_ENABLE_DISCOVERY, &u, sizeof(u), 0, 0));
-				}
-			}
-
 			pAddress->Release();
 		}
 	}
 
-	BTH_PORT* GetSelectedPort()
-	{
-		ULONG i = ComboBox_GetCurSel(_hwndServerList);
-		if (i < _n)
-		{
-			PLIST_ENTRY head = this, entry = head;
-			do 
-			{
-				entry = entry->Flink;
-			} while (i--);
-
-			return static_cast<BTH_PORT*>(entry);
-		}
-
-		return 0;
-	}
-
 	BTH_ADDR GetSelectedAddr()
 	{
-		if (BTH_PORT* port = GetSelectedPort())
+		if (BTH_RADIO* port = GetSelectedPort())
 		{
-			return port->btAddr;
+			return port->_btAddr;
 		}
 
 		return 0;
@@ -372,7 +218,7 @@ class BtDlg : public ZDlg, ELog, LIST_ENTRY
 
 	HANDLE GetSelectedDevice()
 	{
-		if (BTH_PORT* port = GetSelectedPort())
+		if (BTH_RADIO* port = GetSelectedPort())
 		{
 			return port->_hDevice;
 		}
@@ -380,140 +226,67 @@ class BtDlg : public ZDlg, ELog, LIST_ENTRY
 		return 0;
 	}
 
-	HANDLE GetDevice(ULONG index)
-	{
-		PLIST_ENTRY head = this, entry = head;
-		while ((entry = entry->Blink) != head)
-		{
-			if (static_cast<BTH_PORT*>(entry)->index == index)
-			{
-				return static_cast<BTH_PORT*>(entry)->_hDevice;
-			}
-		}
-
-		return 0;
-	}
-
-	void EnumBTH(HWND hwndDlg)
-	{
-		CONFIGRET cr;
-		ULONG cb = 0, rcb;
-		union {
-			PVOID buf;
-			PZZWSTR Buffer;
-		};
-
-		PVOID stack = alloca(guz);
-		do 
-		{
-			cr = CM_Get_Device_Interface_List_SizeW(&rcb, const_cast<GUID*>(&GUID_BTHPORT_DEVICE_INTERFACE), 0, CM_GET_DEVICE_INTERFACE_LIST_PRESENT);
-
-			if (cr != CR_SUCCESS)
-			{
-				break;
-			}
-
-			if (cb < (rcb *= sizeof(WCHAR)))
-			{
-				cb = RtlPointerToOffset(buf = alloca(rcb - cb), stack);
-			}
-
-			cr = CM_Get_Device_Interface_ListW(const_cast<GUID*>(&GUID_BTHPORT_DEVICE_INTERFACE), 
-				0, Buffer, cb, CM_GET_DEVICE_INTERFACE_LIST_PRESENT);
-
-		} while (cr == CR_BUFFER_SMALL);
-
-		if (cr == CR_SUCCESS)
-		{
-			while (*Buffer)
-			{
-				Add(hwndDlg, Buffer);
-				Buffer += wcslen(Buffer) + 1;
-			}
-		}
-	}
-
 	void OnInitDialog(HWND hwndDlg)
 	{
-		SendMessage(hwndDlg, WM_SETICON, ICON_SMALL, (LPARAM)LoadIconW((HINSTANCE)&__ImageBase, MAKEINTRESOURCEW(IDI_BTH)));
+		log.Set(GetDlgItem(hwndDlg, ID_LOG));
 
-		ELog::Set(GetDlgItem(hwndDlg, ID_LOG));
-
-		_hwndServerList = GetDlgItem(hwndDlg, ID_LIST);
 		_hwndAddress = GetDlgItem(hwndDlg, ID_TO_ADDRESS);
 
-		DEV_BROADCAST_DEVICEINTERFACE NotificationFilter = { 
-			sizeof(DEV_BROADCAST_DEVICEINTERFACE), DBT_DEVTYP_DEVICEINTERFACE, 0, GUID_BTHPORT_DEVICE_INTERFACE
-		};
-
-		if (HDEVNOTIFY HandleV = RegisterDeviceNotification(hwndDlg, &NotificationFilter, DEVICE_NOTIFY_WINDOW_HANDLE))
-		{
-			_HandleV = HandleV;
-		}
-		else
-		{
-			ULONG dwError = GetLastError();
-			*this << L"!! RegisterDeviceNotification\r\n" << dwError;
-		}
-
-		EnumBTH(hwndDlg);
+		BthDlg::OnInitDialog(hwndDlg);
 	}
 
 	void Connect(HWND hwndDlg)
 	{
-		SOCKADDR_BTH asi = { AF_BTH, 0, __uuidof(MyServiceClass), BT_PORT_ANY  };
+		BTH_RADIO* port = GetSelectedPort();
+		if (!port)
+		{
+			return ;
+		}
 
 		HRESULT dwError = WSAEADDRNOTAVAIL;
 
-		WCHAR sz[32];
-		if (GetWindowTextW(_hwndAddress, sz, _countof(sz)))
+		int i = ComboBox_GetCurSel(_hwndAddress);
+		if (0 > i)
 		{
-			PWSTR pc;
-			asi.btAddr = _wcstoui64(sz, &pc, 16);
+			return ;
+		}
 
-			switch (*pc)
+		PBTH_DEVICE_INFO deviceList = (PBTH_DEVICE_INFO)ComboBox_GetItemData(_hwndAddress, i);
+
+		if (!deviceList)
+		{
+			return ;
+		}
+
+		//__uuidof(MyServiceClass)
+		SOCKADDR_BTH asi = { AF_BTH, deviceList->address, {}, deviceList->classOfDevice };
+		
+		log(L"connecting to %I64X:%X ...\r\n", asi.btAddr, asi.port);
+
+		if (BthSocket* p = new BthSocket(BthSocket::t_client, hwndDlg, port->_id, "client"))
+		{
+			dwError = p->Create(0x8000, AF_BTH, BTHPROTO_RFCOMM);
+
+			if (dwError == NOERROR)
 			{
-			case 0:
-				break;
-			case ':':
-				asi.port = wcstoul(pc + 1, &pc, 16);
-				if (!*pc) 
-				{
-					break;
-				}
-				[[fallthrough]];
-			default:
-				*this << WSAEADDRNOTAVAIL;
-				return;
-			}
-
-			operator()(L"connecting to %I64X:%X ...\r\n", asi.btAddr, asi.port);
-
-			if (BthSocket* p = new BthSocket(BthSocket::t_client, hwndDlg, "client"))
-			{
-				dwError = p->Create(0x8000, AF_BTH, BTHPROTO_RFCOMM);
+				dwError = p->Connect((PSOCKADDR)&asi, sizeof(SOCKADDR_BTH));
 
 				if (dwError == NOERROR)
 				{
-					dwError = p->Connect((PSOCKADDR)&asi, sizeof(SOCKADDR_BTH));
-
-					if (dwError == NOERROR)
-					{
-						_pc = p;
-						int ids[] = { -ID_CONNECT, -ID_TO_ADDRESS };
-						EnableControls(hwndDlg, ids, _countof(ids));
-						return ;
-					}
+					_pc = p;
+					int ids[] = { -ID_CONNECT, -ID_TO_ADDRESS };
+					EnableControls(hwndDlg, ids, _countof(ids));
+					return ;
 				}
-
-				p->Release();
 			}
+
+			p->Release();
 		}
 
-		*this << L"!! connect fail:\r\n" << dwError;
+		log << L"!! connect fail:\r\n" << dwError;
 	}
 
-	void EnableControls(HWND hwndDlg, PINT ids, ULONG n)
+	void EnableControls(HWND hwndDlg, const INT* ids, ULONG n)
 	{
 		do 
 		{
@@ -523,12 +296,25 @@ class BtDlg : public ZDlg, ELog, LIST_ENTRY
 			{
 				id = -id, bEnable = FALSE;
 			}
-			if (id == ID_CONNECT && !ComboBox_GetCount(_hwndAddress))
+
+			switch (id)
 			{
-				bEnable = FALSE;
+			case ID_CONNECT:
+				if (_pc || !ComboBox_GetCount(_hwndAddress))
+				{
+					bEnable = FALSE;
+				}
+				break;
+			case ID_START:
+				if (_ps)
+				{
+					bEnable = FALSE;
+				}
+				break;
 			}
 			
 			EnableWindow(GetDlgItem(hwndDlg, id), bEnable);
+
 		} while (--n);
 	}
 
@@ -560,7 +346,7 @@ class BtDlg : public ZDlg, ELog, LIST_ENTRY
 			fmt = L"!! [server]: listen fail !\r\n";
 			SetDlgItemTextW(hwndDlg, IDC_STATIC1, L"Server:");
 			EnableWindow(GetDlgItem(hwndDlg, ID_STOP), FALSE);
-			if (_n)
+			if (GetBthCount())
 			{
 				EnableWindow(GetDlgItem(hwndDlg, ID_START), TRUE);
 			}
@@ -569,7 +355,7 @@ class BtDlg : public ZDlg, ELog, LIST_ENTRY
 			__debugbreak();
 			return;
 		}
-		*this << fmt << (HRESULT)lParam;
+		log << fmt << (HRESULT)lParam;
 	}
 
 	void OnConnectOK(HWND hwndDlg, WPARAM wParam)
@@ -579,7 +365,7 @@ class BtDlg : public ZDlg, ELog, LIST_ENTRY
 		{
 		case BthSocket::t_client:
 			ids[0] = ID_C_DISCONNECT, ids[1] = ID_C_SEND, ids[2] = ID_C_MSG, ids[3] = -ID_CONNECT, ids[4] = -ID_TO_ADDRESS, n = 5;
-			*this << L"<<<< connected to server !\r\n";
+			log << L"<<<< connected to server !\r\n";
 			break;
 		case BthSocket::t_server:
 			ids[0] = ID_S_DISCONNECT, ids[1] = ID_S_SEND, ids[2] = ID_S_MSG, n = 3;
@@ -589,7 +375,7 @@ class BtDlg : public ZDlg, ELog, LIST_ENTRY
 				WCHAR sz[64];
 				swprintf_s(sz, _countof(sz), L"Client ID = %I64X:%X", psa->btAddr, psa->port);
 				SetDlgItemTextW(hwndDlg, ID_FROM_ADDRESS, sz);
-				operator()(L">>>> connect from %I64X:%X\r\n", psa->btAddr, psa->port);
+				log(L">>>> connect from %I64X:%X\r\n", psa->btAddr, psa->port);
 			}
 			break;
 		default:
@@ -604,15 +390,14 @@ class BtDlg : public ZDlg, ELog, LIST_ENTRY
 	{
 		if (ULONG dwError = p->Send(packet))
 		{
-			*this << L"send fail:\r\n" << dwError;
+			log << L"send fail:\r\n" << dwError;
 		}
 		else
 		{
-			operator()(L"send %x bytes ...\r\n", packet->getDataSize());
+			log(L"send %x bytes ...\r\n", packet->getDataSize());
 		}
 
 		packet->Release();
-
 	}
 
 	void Send(BthSocket* p, HWND hwndDlg, ULONG id)
@@ -649,98 +434,17 @@ class BtDlg : public ZDlg, ELog, LIST_ENTRY
 		}
 	}
 
-	void OnDestroy()
-	{
-		StopServer();
-
-		if (BthSocket* pc = _pc)
-		{
-			pc->Close();
-			pc->Release();
-			_pc = 0;
-		}
-
-		if (HDEVNOTIFY HandleV = _HandleV)
-		{
-			UnregisterDeviceNotification(HandleV);
-		}
-
-		ClosePorts();
-	}
-
-	void Add(_In_ HWND hwndDlg, _In_ PCWSTR pszDeviceInterface)
-	{
-		operator()(L"++ %s\r\n", pszDeviceInterface);
-
-		if (BTH_PORT* port = new BTH_PORT(this))
-		{
-			UNICODE_STRING us;
-			RtlInitUnicodeString(&us, pszDeviceInterface);
-			RtlHashUnicodeString(&us, FALSE, HASH_STRING_ALGORITHM_DEFAULT, &port->hash);
-
-			NTSTATUS status;
-			HANDLE hDevice = CreateFileW(pszDeviceInterface, 0, 0, 0, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, 0);
-
-			if (hDevice != INVALID_HANDLE_VALUE)
-			{
-				RtlSetIoCompletionCallback(hDevice, HCI_REQUEST::OnBthComplete, 0);
-				port->_hDevice = hDevice;
-
-				BTH_LOCAL_RADIO_INFO bei;
-
-				status = SyncIoctl(hDevice, IOCTL_BTH_GET_LOCAL_INFO, 0, 0, &bei, sizeof(bei));
-				
-				if (0 > status)
-				{
-					*this << L"!! IOCTL_BTH_GET_LOCAL_INFO\r\n" << HRESULT_FROM_NT(status);
-				}
-				else
-				{
-					operator()(L"[%I64X] \"%S\"\r\n", bei.localInfo.address, bei.localInfo.name);
-					port->btAddr = bei.localInfo.address;
-				}
-			}
-			else
-			{
-				status = GetLastErrorEx();
-				*this << L"!! open file\r\n" << status;
-			}
-
-			PWSTR psz;
-			if (CR_SUCCESS == GetFriendlyName(&psz, pszDeviceInterface))
-			{
-				operator()(L"%s\r\n", psz);
-				int i;
-				HWND hwndCB = _hwndServerList;
-
-				if (0 > (i = ComboBox_AddString(hwndCB, psz)))
-				{
-					delete port;
-				}
-				else
-				{
-					ComboBox_SetCurSel(hwndCB, i);
-
-					if (!_n++)
-					{
-						int ids[] = { ID_START, ID_CONNECT, ID_TO_ADDRESS, ID_LIST, ID_DISCOVERY };
-						EnableControls(hwndDlg, ids, _countof(ids));
-					}
-				}
-
-				LocalFree(psz);
-			}
-
-		}
-	}
-
 	void StopServer()
 	{
 		if (BthSocket* ps = _ps)
 		{
-			if (HANDLE hDevice = GetDevice(_index))
+			if (HANDLE_SDP hRecord = _recordHandle)
 			{
-				UnregisterService(hDevice, _recordHandle);
+				if (BTH_RADIO* port = getByRadioId(ps->get_id()))
+				{
+					UnregisterService(port->_hDevice, hRecord);
+					_recordHandle = 0;
+				}
 			}
 
 			ps->Close();
@@ -748,83 +452,6 @@ class BtDlg : public ZDlg, ELog, LIST_ENTRY
 			_ps = 0;
 			_btAddr = 0;
 			_port = 0;
-		}
-	}
-
-	void Remove(_In_ HWND hwndDlg, _In_ PCWSTR pszDeviceInterface)
-	{
-		operator()(L"-- %s\r\n", pszDeviceInterface);
-		if (_n)
-		{
-			ULONG hash;
-			UNICODE_STRING us;
-			RtlInitUnicodeString(&us, pszDeviceInterface);
-			RtlHashUnicodeString(&us, FALSE, HASH_STRING_ALGORITHM_DEFAULT, &hash);
-
-			int i = 0;
-			PLIST_ENTRY head = this, entry = head;
-			do 
-			{
-				entry = entry->Flink;
-
-				if (static_cast<BTH_PORT*>(entry)->hash == hash)
-				{
-					HWND hwndCB = _hwndServerList;
-					ComboBox_DeleteString(hwndCB, i);
-					ComboBox_SetCurSel(hwndCB, 0);
-
-					BOOL b = FALSE;
-
-					if (_btAddr == static_cast<BTH_PORT*>(entry)->btAddr)
-					{
-						StopServer();
-						b = TRUE;
-					}
-
-					delete static_cast<BTH_PORT*>(entry);
-
-					if (--_n)
-					{
-						if (b)
-						{
-							EnableWindow(GetDlgItem(hwndDlg, ID_START), TRUE);
-						}
-					}
-					else
-					{
-						int ids[] = { -ID_START, -ID_CONNECT, -ID_TO_ADDRESS, -ID_LIST, -ID_DISCOVERY };
-						EnableControls(hwndDlg, ids, _countof(ids));
-					}
-					return;
-				}
-
-				i++;
-
-			} while (entry != head);
-		}
-	}
-
-	void OnInterfaceChange(_In_ HWND hwndDlg, _In_ WPARAM wParam, _In_ PDEV_BROADCAST_DEVICEINTERFACE p)
-	{
-		switch (wParam)
-		{
-		case DBT_DEVICEREMOVECOMPLETE:
-		case DBT_DEVICEARRIVAL:
-			break;
-		default: return;
-		}
-
-		if (p->dbcc_devicetype == DBT_DEVTYP_DEVICEINTERFACE && p->dbcc_classguid == GUID_BTHPORT_DEVICE_INTERFACE)
-		{
-			switch (wParam)
-			{
-			case DBT_DEVICEREMOVECOMPLETE:
-				Remove(hwndDlg, p->dbcc_name);
-				break;
-			case DBT_DEVICEARRIVAL:
-				Add(hwndDlg, p->dbcc_name);
-				break;
-			}
 		}
 	}
 
@@ -836,7 +463,7 @@ class BtDlg : public ZDlg, ELog, LIST_ENTRY
 		{
 		case BthSocket::t_client:
 			ids[0] = -ID_C_DISCONNECT, ids[1] = -ID_C_SEND, ids[2] = -ID_C_MSG, ids[3] = ID_CONNECT, ids[4] = ID_TO_ADDRESS, n = 5;
-			*this << L"client disconnected !\r\n";
+			log << L"client disconnected !\r\n";
 			if (ps = _pc)
 			{
 				ps->Close();
@@ -847,7 +474,7 @@ class BtDlg : public ZDlg, ELog, LIST_ENTRY
 		case BthSocket::t_server:
 			ids[0] = -ID_S_DISCONNECT, ids[1] = -ID_S_SEND, ids[2] = -ID_S_MSG, n = 3;
 
-			*this <<  L"server disconnected !\r\n";
+			log <<  L"server disconnected !\r\n";
 			SetDlgItemTextW(hwndDlg, ID_FROM_ADDRESS, L"Client ID =");
 			if (ps = _ps)
 			{
@@ -857,11 +484,11 @@ class BtDlg : public ZDlg, ELog, LIST_ENTRY
 				{
 					int ids2[] = { -ID_START, ID_STOP };
 					EnableControls(hwndDlg, ids2, _countof(ids2));
-					*this << L"Listening ...\r\n";
+					log << L"Listening ...\r\n";
 				}
 				else
 				{
-					*this << L"!! Listen:\r\n" << dwError;
+					log << L"!! Listen:\r\n" << dwError;
 				}
 			}
 			break;
@@ -873,194 +500,95 @@ class BtDlg : public ZDlg, ELog, LIST_ENTRY
 		EnableControls(hwndDlg, ids, n);
 	}
 
-	void Discovery(HWND hwndDlg, HANDLE hDevice)
+	void RadioNotFound()
 	{
-		if (!hDevice)
-		{
-			return;
-		}
-
-#pragma pack(push, 1)
-		struct HCI_INQUIRE 
-		{
-			ULONG ul;
-			UCHAR u1; 
-			UCHAR u2; 
-		} hci_inc = { LAP_GIAC_VALUE, 5 };
-#pragma pack(pop)
-
-		ComboBox_ResetContent(_hwndAddress);
-		EnableWindow(GetDlgItem(hwndDlg, ID_CONNECT), FALSE);
-
-		if (HCI_REQUEST* p = new HCI_REQUEST(hwndDlg, HCI_REQUEST::c_inq))
-		{
-			LockDev();
-			NTSTATUS status = NtDeviceIoControlFile(hDevice, 0, 0, p, p, IOCTL_BTH_HCI_INQUIRE, &hci_inc, sizeof(hci_inc), 0, 0);
-			operator()(L"General Inquiry ... [%X]\r\n", status);
-			p->CheckStatus(status);
-		}
+		log << L"no bluetooth radio\r\n";
 	}
 
-	void DoSDP(HWND hwndDlg, HANDLE hDevice, BTH_ADDR address)
+	BTH_REQUEST* AllocateRequest(HWND hwndDlg, ULONG bthId, ULONG code, ULONG OutSize = 0)
 	{
-		if (HCI_REQUEST* p = new(sizeof(BTH_SDP_CONNECT)) HCI_REQUEST(hwndDlg, HCI_REQUEST::c_cnt))
+		if (BTH_REQUEST* irp = new(OutSize) BTH_REQUEST(hwndDlg, bthId, code))
 		{
-			LockDev();
-			PBTH_SDP_CONNECT psc = (PBTH_SDP_CONNECT)p->Data;
-			psc->bthAddress = address;
-			psc->fSdpConnect = 0;
-			psc->hConnection = 0;
-			psc->requestTimeout = SDP_REQUEST_TO_DEFAULT;
-
-			p->btAddr = address;
-
-			NTSTATUS status = NtDeviceIoControlFile(hDevice, 0, 0, p, p, IOCTL_BTH_SDP_CONNECT, 
-				psc, sizeof(BTH_SDP_CONNECT), psc, sizeof(BTH_SDP_CONNECT));
-
-			operator()(L"SDP_CONNECT to %I64x ... [%X]\r\n", address, status);
-			p->CheckStatus(status);
+			LockInquire(hwndDlg);
+			return irp;
 		}
+
+		return 0;
 	}
 
-	static void Disconnect(HANDLE hDevice, ULONGLONG hConnection)
+	void StartInquire(HWND hwndDlg)
 	{
-		if (HCI_REQUEST* p = new HCI_REQUEST(0, HCI_REQUEST::c_dsc))
+		if (BTH_RADIO* port = GetSelectedPort())
 		{
-			p->CheckStatus(NtDeviceIoControlFile(hDevice, 0, 0, p, p, IOCTL_BTH_SDP_DISCONNECT, 
-				&hConnection, sizeof(hConnection), 0, 0));
-		}
-	}
-
-	void OnSdpSearch(HWND hwndDlg, HANDLE hDevice, HCI_REQUEST* q)
-	{
-		NTSTATUS status = q->Status;
-		BTH_ADDR btAddr = q->btAddr;
-		operator()(L"SERVICE_SEARCH in [%I64X] = %X [%u ms]\r\n", btAddr, status, q->GetIoTime());
-		
-		Disconnect(hDevice, q->hConnection);
-
-		if (0 > status)
-		{
-			*this << HRESULT_FROM_NT(status);
-		}
-		else
-		{
-			PBTH_SDP_STREAM_RESPONSE pr = (PBTH_SDP_STREAM_RESPONSE)q->Data;
-			PUCHAR resp = pr->response;
-			
-			PWSTR psz = 0;
-			ULONG cch = 0;
-			ULONG responseSize = pr->responseSize;
-			while (CryptBinaryToStringW(resp, responseSize, CRYPT_STRING_HEX, psz, &cch))
+			if (BTH_REQUEST* irp = AllocateRequest(hwndDlg, port->_id, BTH_REQUEST::c_inq, sizeof(ULONG)))
 			{
-				if (psz)
-				{
-					*this << psz;
-					break;
-				}
+				BTH_DEVICE_INQUIRY hci_inc = { LAP_GIAC_VALUE, SDP_DEFAULT_INQUIRY_SECONDS };
 
-				psz = (PWSTR)alloca(cch * sizeof(WCHAR));
-			}
+				NTSTATUS status = NtDeviceIoControlFile(port->_hDevice, 0, 0, irp, irp, 
+					IOCTL_BTH_DEVICE_INQUIRY, &hci_inc, sizeof(hci_inc), irp->Data, sizeof(ULONG));
 
-			USHORT Port;
-			if (GetProtocolValue(*this, resp, responseSize, RFCOMM_PROTOCOL_UUID16, sizeof(UINT8), &Port))
-			{
-				operator()(L"!! Found Server [%I64X:%X] !!\r\n", btAddr, Port);
-				WCHAR sz[32];
-				swprintf_s(sz, _countof(sz), L"%I64X:%X", btAddr, Port);
-				int i = ComboBox_AddString(_hwndAddress, sz);
-				if (0 <= i)
-				{
-					ComboBox_SetCurSel(_hwndAddress, i);
-					EnableWindow(GetDlgItem(hwndDlg, ID_CONNECT), TRUE);
-				}
+				log(L"General Inquiry ... [%X]\r\n", status);
+
+				irp->CheckStatus(status);
+
+				//SendDlgItemMessageW(hwndDlg, IDC_PROGRESS1, PBM_SETMARQUEE, TRUE, 50);
 			}
 		}
 	}
 
-	void OnSdpConnect(HWND hwndDlg, HANDLE hDevice, HCI_REQUEST* q)
+	void OnInquireEnd(HWND hwndDlg, BTH_REQUEST* irp)
 	{
-		PBTH_SDP_CONNECT psc = (PBTH_SDP_CONNECT)q->Data;
-		NTSTATUS status = q->Status;
-		BTH_ADDR btAddr = q->btAddr;
-		operator()(L"SDP_CONNECT to[%I64X] = %X [%u ms]\r\n", btAddr, status, q->GetIoTime());
-
+		NTSTATUS status = irp->Status;
+		ULONG numOfDevices = *(PULONG)irp->Data;
+		log(L"General Inquiry = %X [numOfDevices = %x] [%u ms]\r\n", status, numOfDevices, irp->GetIoTime());
 		if (0 > status)
 		{
 __0:
-			*this << HRESULT_FROM_NT(status);
-		}
-		else
-		{
-			if (HCI_REQUEST* p = new(FIELD_OFFSET(BTH_SDP_STREAM_RESPONSE, response[0x200])) HCI_REQUEST(hwndDlg, HCI_REQUEST::c_srh))
-			{
-				LockDev();
-				p->hConnection = psc->hConnection;
-				p->btAddr = btAddr;
-
-				BTH_SDP_SERVICE_ATTRIBUTE_SEARCH_REQUEST sss = { 
-					psc->hConnection, 0, { 
-						{ {__uuidof(MyServiceClass)}, SDP_ST_UUID128}
-					},
-					{ 
-						{SDP_ATTRIB_PROTOCOL_DESCRIPTOR_LIST, SDP_ATTRIB_PROTOCOL_DESCRIPTOR_LIST} 
-					}
-				};
-
-				status = NtDeviceIoControlFile(hDevice, 0, 0, p, p, IOCTL_BTH_SDP_SERVICE_ATTRIBUTE_SEARCH, 
-					&sss, sizeof(sss), p->Data, FIELD_OFFSET(BTH_SDP_STREAM_RESPONSE, response[0x200]));
-
-				operator()(L"SERVICE_SEARCH in %I64x ... [%X]\r\n", btAddr, status);
-				p->CheckStatus(status);
-				if (0 > status)
-				{
-					goto __0;
-				}
-			}
-		}
-	}
-
-	void OnDiscoveryEnd(HWND hwndDlg, HCI_REQUEST* ph)
-	{
-		NTSTATUS status = ph->Status;
-		operator()(L"General Inquiry = %X [%u ms]\r\n", status, ph->GetIoTime());
-		if (0 > ph->Status)
-		{
-__0:
-			*this << HRESULT_FROM_NT(status);
+			log << HRESULT_FROM_NT(status);
 			return ;
 		}
 
-		HANDLE hDevice = GetSelectedDevice();
+		ULONG bthId = irp->bthId;
 
-		if (!hDevice)
+		BTH_RADIO* port = getByRadioId(bthId);
+
+		if (!port)
 		{
-			return ;
+			return RadioNotFound();
 		}
 
-		ULONG numOfDevices;
+		HANDLE hDevice = port->_hDevice;
+
 		status = SyncIoctl(hDevice, IOCTL_BTH_GET_DEVICE_INFO, 0, 0, &numOfDevices, sizeof(numOfDevices));
 
-		operator()(L"BTH_GET_DEVICE_INFO = %X [numOfDevices = %x]\r\n", status, numOfDevices);
+		log(L"BTH_GET_DEVICE_INFO = %X [numOfDevices = %x]\r\n", status, numOfDevices);
+
 		if (0 > status)
 		{
 			goto __0;
 		}
+
+		status = HRESULT_FROM_NT(STATUS_NOT_FOUND);
+
 		if (numOfDevices)
 		{
 			ULONG size = FIELD_OFFSET(BTH_DEVICE_INFO_LIST, deviceList[numOfDevices]);
+
+			status = STATUS_NO_MEMORY;
 
 			if (PBTH_DEVICE_INFO_LIST p = (PBTH_DEVICE_INFO_LIST)LocalAlloc(0, size))
 			{
 				if (0 <= (status = SyncIoctl(hDevice, IOCTL_BTH_GET_DEVICE_INFO, 0, 0, p, size)))
 				{
+					status = STATUS_NOT_FOUND;
+
 					if (numOfDevices = p->numOfDevices)
 					{
 						PBTH_DEVICE_INFO deviceList = p->deviceList;
 						do 
 						{
 							ULONG flags = deviceList->flags;
-							operator()(L"found: [%I64X] \"%S\" (%x %x)\r\n", 
+							log(L"found: [%I64X] \"%S\" (%x %x)\r\n", 
 								BDIF_ADDRESS & flags ? deviceList->address : 0, 
 								BDIF_NAME & flags ? deviceList->name : "",
 								BDIF_COD  & flags ? deviceList->classOfDevice : 0, 
@@ -1068,16 +596,198 @@ __0:
 
 							if (BDIF_ADDRESS & flags)
 							{
-								DoSDP(hwndDlg, hDevice, deviceList->address);
+								status = 0;
+								ConnectToSDP(hwndDlg, hDevice, bthId, deviceList->address);
 							}
 
 						} while (deviceList++, --numOfDevices);
+
+						_pList = p;
+
+						return ;
 					}
 				}
 
 				LocalFree(p);
 			}
 		}
+
+		if (0 > status)
+		{
+			goto __0;
+		}
+	}
+
+	void ConnectToSDP(HWND hwndDlg, HANDLE hDevice, ULONG bthId, BTH_ADDR address)
+	{
+		if (BTH_REQUEST* irp = AllocateRequest(hwndDlg, bthId, BTH_REQUEST::c_cnt, sizeof(BTH_SDP_CONNECT)))
+		{
+			PBTH_SDP_CONNECT psc = (PBTH_SDP_CONNECT)irp->Data;
+			psc->bthAddress = address;
+			psc->fSdpConnect = 0;
+			psc->hConnection = 0;
+			psc->requestTimeout = SDP_REQUEST_TO_DEFAULT;
+
+			irp->btAddr = address;
+
+			NTSTATUS status = NtDeviceIoControlFile(hDevice, 0, 0, irp, irp, 
+				IOCTL_BTH_SDP_CONNECT, psc, sizeof(BTH_SDP_CONNECT), psc, sizeof(BTH_SDP_CONNECT));
+
+			log(L"SDP_CONNECT to [%I64X] ... [%X]\r\n", address, status);
+			irp->CheckStatus(status);
+		}
+	}
+
+	void OnSdpConnect(HWND hwndDlg, BTH_REQUEST* irp)
+	{
+		PBTH_SDP_CONNECT psc = (PBTH_SDP_CONNECT)irp->Data;
+		NTSTATUS status = irp->Status;
+		BTH_ADDR btAddr = irp->btAddr;
+		log(L"SDP_CONNECT to [%I64X] = %X [%u ms]\r\n", btAddr, status, irp->GetIoTime());
+
+		if (0 > status)
+		{
+__0:
+			log << HRESULT_FROM_NT(status);
+			return ;
+		}
+
+		ULONG bthId = irp->bthId;
+
+		BTH_RADIO* port = getByRadioId(bthId);
+
+		if (!port)
+		{
+			return RadioNotFound();
+		}
+
+		if (irp = AllocateRequest(hwndDlg, bthId, BTH_REQUEST::c_srh, FIELD_OFFSET(BTH_SDP_STREAM_RESPONSE, response[0x200])))
+		{
+			irp->hConnection = psc->hConnection;
+			irp->btAddr = btAddr;
+
+			BTH_SDP_SERVICE_ATTRIBUTE_SEARCH_REQUEST sss = { 
+				psc->hConnection, 0, {{ {__uuidof(MyServiceClass)}, SDP_ST_UUID128}},
+				{{SDP_ATTRIB_PROTOCOL_DESCRIPTOR_LIST, SDP_ATTRIB_PROTOCOL_DESCRIPTOR_LIST}}
+			};
+
+			status = NtDeviceIoControlFile(port->_hDevice, 0, 0, irp, irp, IOCTL_BTH_SDP_SERVICE_ATTRIBUTE_SEARCH, 
+				&sss, sizeof(sss), irp->Data, FIELD_OFFSET(BTH_SDP_STREAM_RESPONSE, response[0x200]));
+
+			log(L"SERVICE_SEARCH in [%I64X] ... [%X]\r\n", btAddr, status);
+			irp->CheckStatus(status);
+			if (0 > status)
+			{
+				goto __0;
+			}
+		}
+	}
+
+	void OnSdpSearch(HWND hwndDlg, BTH_REQUEST* irp)
+	{
+		NTSTATUS status = irp->Status;
+		BTH_ADDR btAddr = irp->btAddr;
+		log(L"SERVICE_SEARCH in [%I64X] = %X [%u ms]\r\n", btAddr, status, irp->GetIoTime());
+
+		ULONG bthId = irp->bthId;
+		BTH_RADIO* port = getByRadioId(bthId);
+
+		if (!port)
+		{
+			return RadioNotFound();
+		}
+
+		SdpDisconnect(port->_hDevice, irp->hConnection);
+
+		if (0 > status)
+		{
+			log << HRESULT_FROM_NT(status);
+			return;
+		}
+
+		PBTH_SDP_STREAM_RESPONSE pr = (PBTH_SDP_STREAM_RESPONSE)irp->Data;
+		PUCHAR resp = pr->response;
+
+		PWSTR psz = 0;
+		ULONG cch = 0;
+		ULONG responseSize = pr->responseSize;
+		while (CryptBinaryToStringW(resp, responseSize, CRYPT_STRING_HEX, psz, &cch))
+		{
+			if (psz)
+			{
+				log << psz;
+				break;
+			}
+
+			psz = (PWSTR)alloca(cch * sizeof(WCHAR));
+		}
+
+		USHORT Port;
+
+		if (GetProtocolValue(log, resp, responseSize, RFCOMM_PROTOCOL_UUID16, sizeof(UINT8), &Port))
+		{
+			log(L"!! Found Device [%I64X:%X] !!\r\n", btAddr, Port);
+
+			if (PBTH_DEVICE_INFO_LIST pList = _pList)
+			{
+				if (ULONG numOfDevices = pList->numOfDevices)
+				{
+					PBTH_DEVICE_INFO deviceList = pList->deviceList;
+
+					do 
+					{
+						if (deviceList->address == btAddr)
+						{
+							deviceList->classOfDevice = Port;
+							int i;
+							WCHAR name[BTH_MAX_NAME_SIZE];
+							if (deviceList->flags & BDIF_NAME)
+							{
+								i = MultiByteToWideChar(CP_UTF8, 0, deviceList->name, MAXULONG, name, _countof(name));
+							}
+							else
+							{
+								i = swprintf_s(name, _countof(name), L"[%I64X]", btAddr);
+							}
+
+							if (0 < i && 0 <= (i = ComboBox_AddString(_hwndAddress, name)))
+							{
+								ComboBox_SetItemData(_hwndAddress, i, (LPARAM)deviceList);
+								ComboBox_SetCurSel(_hwndAddress, i);
+
+								if (i == 0)
+								{
+									EnableWindow(_hwndAddress, TRUE);
+									if (!_pc) 
+									{
+										EnableWindow(GetDlgItem(hwndDlg, ID_CONNECT), TRUE);
+									}
+								}
+							}
+							break;
+						}
+					} while (deviceList++, --numOfDevices);
+				}
+			}
+		}
+	}
+
+	static void SdpDisconnect(HANDLE hDevice, ULONGLONG hConnection)
+	{
+		if (BTH_REQUEST* irp = new BTH_REQUEST(0, 0, BTH_REQUEST::c_dsc))
+		{
+			irp->CheckStatus(NtDeviceIoControlFile(hDevice, 0, 0, irp, irp, 
+				IOCTL_BTH_SDP_DISCONNECT, &hConnection, sizeof(hConnection), 0, 0));
+		}
+	}
+
+	void OnDestroy()
+	{
+		if (PBTH_DEVICE_INFO_LIST pList = _pList)
+		{
+			LocalFree(pList);
+		}
+		BthDlg::OnDestroy();
 	}
 
 	virtual INT_PTR DialogProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
@@ -1105,11 +815,11 @@ __0:
 			return 0;
 
 		case WM_RECV:
-			operator()(L"recv %x bytes:\r\n", wParam);
+			log(L"recv %x bytes:\r\n", wParam);
 			if (wParam < 0x100 && !(wParam & 1) &&
 				!*(PWSTR)RtlOffsetToPointer(lParam, wParam - sizeof(WCHAR)))
 			{
-				*this << (PWSTR)lParam << L"\r\n";
+				log << (PWSTR)lParam << L"\r\n";
 			}
 			return 0;
 
@@ -1120,28 +830,28 @@ __0:
 		case WM_BTH:
 			switch (wParam)
 			{
-			case HCI_REQUEST::c_inq:
-				OnDiscoveryEnd(hwndDlg, (HCI_REQUEST*)lParam);
+			case BTH_REQUEST::c_inq:
+				OnInquireEnd(hwndDlg, (BTH_REQUEST*)lParam);
 				break;
-			case HCI_REQUEST::c_cnt:
-				OnSdpConnect(hwndDlg, GetSelectedDevice(), (HCI_REQUEST*)lParam);
+			case BTH_REQUEST::c_cnt:
+				OnSdpConnect(hwndDlg, (BTH_REQUEST*)lParam);
 				break;
-			case HCI_REQUEST::c_srh:
-				OnSdpSearch(hwndDlg, GetSelectedDevice(), (HCI_REQUEST*)lParam);
+			case BTH_REQUEST::c_srh:
+				OnSdpSearch(hwndDlg, (BTH_REQUEST*)lParam);
 				break;
 			default:
 				__debugbreak();
 			}
 
-			delete (HCI_REQUEST*)lParam;
-			UnlockDev();
-			break;
+			delete (BTH_REQUEST*)lParam;
+			UnlockInquire(hwndDlg);
+			return 0;
 
 		case WM_COMMAND:
 			switch (wParam)
 			{
 			case IDCANCEL:
-				EndDialog(hwndDlg, 0);
+				if (_dwInquireCount) { log << L"can not close while inquire active\r\n"; } else EndDialog(hwndDlg, 0);
 				break;
 			case ID_CONNECT:
 				if (!_pc)
@@ -1150,12 +860,11 @@ __0:
 				}
 				break;
 			case ID_START:
-				if (!_ps && _n)
+				if (!_ps)
 				{
-					if (BTH_PORT* port = GetSelectedPort())
+					if (BTH_RADIO* port = GetSelectedPort())
 					{
-						_index = port->index;
-						StartServer(hwndDlg, port->_hDevice, port->btAddr);
+						StartServer(hwndDlg, port);
 					}
 				}
 				break;
@@ -1181,46 +890,92 @@ __0:
 				if (_ps) Send(_ps, hwndDlg, ID_S_MSG);
 				break;
 			case ID_DISCOVERY:
-				Discovery(hwndDlg, GetSelectedDevice());
+				StartInquire(hwndDlg);
 				break;
 			}
 			return 0;
 		}
 		return ZDlg::DialogProc(hwndDlg, uMsg, wParam, lParam);
 	}
-public:
-
-	BtDlg()
-	{
-		InitializeListHead(this);
-	}
 };
 
-void bthDlg()
+void bthDlg(HWND hwndDlg)
 {
-	WSADATA wd;
-	if (!WSAStartup(WINSOCK_VERSION, &wd))
-	{
-		BtDlg dlg;
-		dlg.DoModal((HINSTANCE)&__ImageBase, MAKEINTRESOURCEW(IDD_DIALOG1), 0, 0);
-		WSACleanup();
-	}
+	BtDlg dlg;
+	dlg.DoModal((HINSTANCE)&__ImageBase, MAKEINTRESOURCEW(IDD_DIALOG1), hwndDlg, 0);
 }
 
 #include "../inc/initterm.h"
+#include "CertServer.h"
+void InsertSC(HWND hwndDlg);
 
 void Install();
 BOOL BuildSdp(USHORT Psm, UCHAR Cn);
 void L2Test();
+void ImportCert(HWND hwndDlg);
+
+DWORD HashString(PCSTR lpsz, DWORD hash = 0)
+{
+	while (char c = *lpsz++) hash = hash * 33 + (c | 0x20);
+	return hash;
+}
+
+void PrintHash(PCSTR lpsz)
+{
+	DbgPrint("0x%08X, // \"%s\"\n", HashString(lpsz), lpsz);
+}
+
+static ULONG ha[] = {
+	0x045CED30, // "bthport.sys"
+	0x970F5920, // "bthenum.sys"
+	0x9A57BC6B, // "ntoskrnl.exe"
+	0x67DEC51F, // "wdf01000.sys"
+};
+
+
+INT_PTR CALLBACK StartDialogProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+	switch (uMsg)
+	{
+	case WM_COMMAND:
+		switch (wParam)
+		{
+		case IDCANCEL:
+			EndDialog(hwndDlg, lParam);
+			break;
+		case IDC_BUTTON1:
+			ImportCert(hwndDlg);
+			break;
+		case IDC_BUTTON2:
+			InsertSC(hwndDlg);
+			break;
+		case IDC_BUTTON3:
+			bthDlg(hwndDlg);
+			break;
+		}
+		break;
+	}
+	return 0;
+}
 
 void CALLBACK ep(void*)
 {
-	//BuildSdp(0x8877, 0x66);
-	//if (IsDebuggerPresent())Install();
-
 	initterm();
-	L2Test();
-	bthDlg();
+
+	if (0 <= CoInitializeEx(0, COINIT_DISABLE_OLE1DDE|COINIT_APARTMENTTHREADED))
+	{
+		WSADATA wd;
+		if (!WSAStartup(WINSOCK_VERSION, &wd))
+		{
+			DialogBoxParamW((HINSTANCE)&__ImageBase, MAKEINTRESOURCEW(IDD_DIALOG5), 0, StartDialogProc, 0);
+			WSACleanup();
+		}
+		CoUninitialize();
+	}
+	if (IsDebuggerPresent()){
+
+	}
+
 	IO_RUNDOWN::g_IoRundown.BeginRundown();
 	destroyterm();
 	ExitProcess(0);

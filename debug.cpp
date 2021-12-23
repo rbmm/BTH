@@ -73,4 +73,23 @@ void Dump(ELog& log, PSDP_NODE pNode)
 	Dump(log, pNode, prefix + _countof(prefix) - 1);
 }
 
+void DumpBytes(const UCHAR* pb, ULONG cb)
+{
+	if (cb)
+	{
+		do 
+		{
+			ULONG m = min(16, cb);
+			cb -= m;
+			char buf[128], *sz = buf;
+			do 
+			{
+				sz += sprintf(sz, "%02x ", *pb++);
+			} while (--m);
+			*sz++ = '\n', *sz++ = 0;
+			OutputDebugStringA(buf);
+		} while (cb);
+	}
+}
+
 _NT_END

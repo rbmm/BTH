@@ -2,6 +2,8 @@
 
 _NT_BEGIN
 
+#include "CM.h"
+
 extern volatile const UCHAR guz;
 
 CONFIGRET GetFriendlyName(_Out_ PWSTR* ppszName, _In_ DEVINST dnDevInst)
@@ -127,6 +129,84 @@ ULONG OpenDevice(_Out_ PHANDLE phFile, _In_ const GUID* InterfaceClassGuid)
 	}
 
 	return CM_MapCrToWin32Err(cr, ERROR_GEN_FAILURE);
+}
+
+//////////////////////////////////////////////////////////////////////////
+
+CONFIGRET DevNodeString(_Out_ PWSTR* ppszName, _In_ DEVNODE dnDevInst, _In_ CONST DEVPROPKEY *PropertyKey)
+{
+	DEVPROPTYPE PropertyType;
+
+	union {
+		PVOID pv;
+		PWSTR sz;
+		PBYTE pb;
+	};
+
+	ULONG cb = 0x80;
+	CONFIGRET cr;
+
+	do 
+	{
+		cr = CR_OUT_OF_MEMORY;
+
+		if (pv = LocalAlloc(0, cb))
+		{
+			if (CR_SUCCESS == (cr = CM_Get_DevNode_PropertyW(dnDevInst, PropertyKey, &PropertyType, pb, &cb, 0)))
+			{
+				if (PropertyType == DEVPROP_TYPE_STRING)
+				{
+					*ppszName = sz;
+					return CR_SUCCESS;
+				}
+
+				cr = CR_FAILURE;
+			}
+			LocalFree(pv);
+		}
+
+	} while (cr == CR_BUFFER_SMALL);
+
+	return cr;
+}
+
+CONFIGRET GetDeviceId(_Out_ DEVINSTID_W* ppDeviceID, _In_ PCWSTR pszDeviceInterface)
+{
+	DEVPROPTYPE PropertyType;
+
+	union {
+		PBYTE PropertyBuffer;
+		PVOID buf;
+		DEVINSTID_W pDeviceID;
+	};
+
+	ULONG cb = 0x80;
+	CONFIGRET cr;
+
+	do 
+	{
+		cr = CR_OUT_OF_MEMORY;
+
+		if (buf = LocalAlloc(0, cb))
+		{
+			if (CR_SUCCESS == (cr = CM_Get_Device_Interface_PropertyW(pszDeviceInterface, 
+				&DEVPKEY_Device_InstanceId, &PropertyType, PropertyBuffer, &cb, 0)))
+			{
+				if (PropertyType == DEVPROP_TYPE_STRING)
+				{
+					*ppDeviceID = pDeviceID;
+					return CR_SUCCESS;
+				}
+
+				cr = CR_FAILURE;
+			}
+
+			LocalFree(buf);
+		}
+
+	} while (cr == CR_BUFFER_SMALL);
+
+	return cr;
 }
 
 _NT_END

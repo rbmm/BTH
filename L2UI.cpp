@@ -5,6 +5,67 @@ _NT_BEGIN
 #include "../asio/io.h"
 #include "../winZ/window.h"
 #include "l2cap.h"
+#include "msg.h"
+
+void DumpBytes(const UCHAR* pb, ULONG cb);
+
+class L2TestSocket : public L2capSocket
+{
+	PCSTR name;
+	HWND _hwnd;
+
+protected:
+
+	virtual ~L2TestSocket()
+	{
+		DbgPrint("%s<%s>\n", __FUNCTION__, name);
+	}
+
+private:
+
+	virtual BOOL OnConnect(NTSTATUS status, _BRB_L2CA_OPEN_CHANNEL* OpenChannel);
+
+	virtual void OnDisconnect(NTSTATUS status);
+
+	virtual void OnRecv(NTSTATUS status, _BRB_L2CA_ACL_TRANSFER* acl);
+
+	virtual void OnSend(NTSTATUS status, _BRB_L2CA_ACL_TRANSFER* acl);
+
+public:
+
+	L2TestSocket(HWND hwnd, PCSTR name) : name(name), _hwnd(hwnd)
+	{
+		DbgPrint("%s<%s>\n", __FUNCTION__, name);
+	}
+};
+
+void L2TestSocket::OnRecv(NTSTATUS status, _BRB_L2CA_ACL_TRANSFER* acl)
+{
+	DbgPrint("%s<%p>(s=%x %x/%x)\n", __FUNCTION__, this, status, acl->RemainingBufferSize, acl->BufferSize);
+	DumpBytes((PUCHAR)acl->Buffer, acl->BufferSize);
+	SendMessageW(_hwnd, WM_RECV, 0, 0);
+}
+
+void L2TestSocket::OnSend(NTSTATUS status, _BRB_L2CA_ACL_TRANSFER* acl)
+{
+	DbgPrint("%s<%p>(s=%x %x/%x)\n", __FUNCTION__, this, status, acl->RemainingBufferSize, acl->BufferSize);
+}
+
+void L2TestSocket::OnDisconnect(NTSTATUS status)
+{
+	DbgPrint("%s<%p>(%x)\n", __FUNCTION__, this, status);
+	PostMessageW(_hwnd, WM_DISCONNECT, 0, 0);
+}
+
+BOOL L2TestSocket::OnConnect(NTSTATUS status, _BRB_L2CA_OPEN_CHANNEL* OpenChannel)
+{
+	DbgPrint("%s<%p>%p(%x %x %x)=%x\n", __FUNCTION__, this, OpenChannel->ChannelHandle,
+		OpenChannel->Hdr.Status, OpenChannel->Hdr.BtStatus, OpenChannel->Response, status);
+
+	PostMessageW(_hwnd, WM_CONNECT, 0, HRESULT_FROM_NT(status));
+
+	return TRUE;
+}
 
 class L2Dlg : public ZDlg
 {
@@ -22,8 +83,14 @@ class L2Dlg : public ZDlg
 					ULONG Psm = wcstoul(c + 1, &c, 16);
 					if (Psm && Psm < 0x10000 && !*c)
 					{
+						L2capSocket* p;
+						if (p = _p)
+						{
+							p->Connect(btAddr, (USHORT)Psm);
+							return ;
+						}
 
-						if (L2capSocket* p = new L2capSocket(hwndDlg, "test L2"))
+						if (p = new L2TestSocket(hwndDlg, "test L2"))
 						{
 							if (0 <= p->Create())
 							{
@@ -58,7 +125,7 @@ class L2Dlg : public ZDlg
 		{
 			ULONG len;
 
-			if (*sz == '[' && (len = wcstoul(sz + 1, &c, 16)) && len <= MAXUSHORT && *c==']' && !c[1])
+			if (*sz == '[' && (len = wcstoul(sz + 1, &c, 16)) && len <= 0x100000 && *c==']' && !c[1])
 			{
 				if (CDataPacket* packet = new(len) CDataPacket)
 				{
@@ -75,24 +142,17 @@ class L2Dlg : public ZDlg
 		}
 	}
 
-	void Recv()
-	{
-		if (CDataPacket* packet = new(0x2000) CDataPacket)
-		{
-			_p->Recv(packet);
-			packet->Release();
-		}
-	}
-
 	virtual INT_PTR DialogProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 	{
 		switch (uMsg)
 		{
+		case WM_DISCONNECT:
+			DbgPrint("WM_DISCONNECT\n");
+			break;
 		case WM_CONNECT:
 			if (lParam < 0)
 			{
-		case WM_DISCONNECT:
-			CloseSocket();
+				CloseSocket();
 			}
 			break;
 		case WM_DESTROY:
@@ -108,14 +168,14 @@ class L2Dlg : public ZDlg
 				if (_p) Send(hwndDlg);
 				break;
 			case IDC_BUTTON3:
-				if (_p) Recv();
+				if (_p) _p->Disconnect();
 				break;
 
 			case IDCANCEL:
 				EndDialog(hwndDlg, 0);
 				break;
 			case IDOK:
-				if (!_p) OnOk(hwndDlg);
+				OnOk(hwndDlg);
 				break;
 			}
 			break;
