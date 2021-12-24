@@ -3,7 +3,6 @@
 _NT_BEGIN
 #include "l2cap.h"
 #include "msg.h"
-
 void DumpBytes(const UCHAR* pb, ULONG cb);
 
 #define IOCTL_L2CA_OPEN_CHANNEL CTL_CODE(FILE_DEVICE_BLUETOOTH, BRB_L2CA_OPEN_CHANNEL, METHOD_BUFFERED, FILE_ANY_ACCESS)
@@ -43,7 +42,6 @@ void L2capSocket::IOCompletionRoutine(CDataPacket* packet, DWORD Code, NTSTATUS 
 		{
 		case IndicationRemoteDisconnect:
 			OnDisconnect(status);
-			Close();
 			break;
 		case IndicationRecvPacket:
 			NeedRecv(status);
@@ -125,6 +123,8 @@ NTSTATUS L2capSocket::Connect(BTH_ADDR BtAddress, USHORT Psm)
 
 		if (NT_IRP* CbIrp = new NT_IRP(this, c_callback, 0))
 		{
+			DbgPrint("CbIrp=%p\n", CbIrp);
+
 			CbIrp->NotDelete();
 
 			if (NT_IRP* Irp = new(sizeof(_BRB_L2CA_OPEN_CHANNEL)) NT_IRP(this, c_connect, 0))

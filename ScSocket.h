@@ -43,11 +43,7 @@ public:
 
 	enum { res_resp = '~~~~' };
 
-	ScSocket(BCRYPT_KEY_HANDLE hKey, SC_Cntr* pkn, HWND hwnd, ULONG id, HWND hwndLog) : _hKey(hKey), _pkn(pkn), _hwnd(hwnd), _id(id)
-	{
-		log.Set(hwndLog);
-		log(L"%s<%p>\r\n", __FUNCTIONW__, this);
-	}
+	ScSocket(BCRYPT_KEY_HANDLE hKey, SC_Cntr* pkn, HWND hwnd, ULONG id, HWND hwndLog);
 
 	ULONG get_id()
 	{

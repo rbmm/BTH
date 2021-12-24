@@ -22,8 +22,8 @@ private:
 	virtual void OnRecv(NTSTATUS status, _BRB_L2CA_ACL_TRANSFER* acl) = 0;
 	virtual void OnSend(NTSTATUS /*status*/, _BRB_L2CA_ACL_TRANSFER* /*acl*/)
 	{
-
 	}
+
 	virtual void OnDisconnect(NTSTATUS status) = 0;
 
 public:

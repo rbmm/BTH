@@ -4,6 +4,8 @@ _NT_BEGIN
 
 #include "ScSocket.h"
 
+//C_ASSERT(FIELD_OFFSET(ScSocket, m_HandleLock)==0x10);
+
 ScSocket::~ScSocket()
 {
 	if ((ULONG)SendMessageW(_hwnd, WM_RES, (LPARAM)_hKey, (WPARAM)_pkn) != res_resp)
@@ -11,6 +13,14 @@ ScSocket::~ScSocket()
 		BCryptDestroyKey(_hKey);
 		delete _pkn;
 	}
+	log(L"%s<%p>\r\n", __FUNCTIONW__, this);
+	DbgPrint("%s<%p>\r\n", __FUNCTION__, this);
+}
+
+ScSocket::ScSocket(BCRYPT_KEY_HANDLE hKey, SC_Cntr* pkn, HWND hwnd, ULONG id, HWND hwndLog) : _hKey(hKey), _pkn(pkn), _hwnd(hwnd), _id(id)
+{
+	DbgPrint("%s<%p>\r\n", __FUNCTION__, this);
+	log.Set(hwndLog);
 	log(L"%s<%p>\r\n", __FUNCTIONW__, this);
 }
 
