@@ -4,6 +4,7 @@ _NT_BEGIN
 
 #include "common.h"
 #include "debug.h"
+#include "../kpdb/module.h"
 
 ConnectionContext::~ConnectionContext()
 {
@@ -80,6 +81,8 @@ void ConnectionContext::IndicationCallback(
 	_In_ PINDICATION_PARAMETERS Parameters
 	)
 {
+	DumpStack(__FUNCTION__);
+
 	DbgPrint("%s<%p>[%x](%s) [%I64X]\n", __FUNCTION__, this, _nRefCount, GetName(Indication), Parameters->BtAddress);
 
 	switch (Indication)

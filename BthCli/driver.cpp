@@ -3,6 +3,7 @@
 _NT_BEGIN
 
 #include "common.h"
+#include "../kpdb/module.h"
 
 NTSTATUS CALLBACK CommonDispatch(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 {
@@ -43,8 +44,16 @@ NTSTATUS CALLBACK AddDevice(PDRIVER_OBJECT DriverObject, PDEVICE_OBJECT Physical
 
 VOID NTAPI DriverUnload(PDRIVER_OBJECT DriverObject)
 {
+	CModule::Cleanup();
 	DbgPrint("DriverUnload(%p)", DriverObject);
 }
+
+static const ULONG ha[] = {
+	0x045CED30, // "bthport.sys"
+	0x970F5920, // "bthenum.sys"
+	0x9A57BC6B, // "ntoskrnl.exe"
+	0x67DEC51F, // "wdf01000.sys"
+};
 
 NTSTATUS NTAPI DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 {
@@ -55,7 +64,12 @@ NTSTATUS NTAPI DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING Registry
 	DriverObject->DriverExtension->AddDevice = AddDevice;
 	DriverObject->DriverUnload = DriverUnload;
 
-	return  TestIoMiniPacket();
+	NTSTATUS status = TestIoMiniPacket();
+	if (0 <= status)
+	{
+		LoadNtModule(_countof(ha), ha);
+	}
+	return status;
 }
 
 _NT_END
