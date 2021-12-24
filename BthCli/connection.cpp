@@ -20,8 +20,11 @@ void ConnectionContext::CloseChannel()
 {
 	if (L2CAP_CHANNEL_HANDLE ChannelHandle = InterlockedExchangePointer(&_ConnectionHandle, 0))
 	{
-		DbgPrint("%s<%p>(%p)\n", __FUNCTION__, this, ChannelHandle);
-		_Fdo->CloseChannel(_BtAddress, ChannelHandle);
+		if (BTH_ADDR BtAddress = InterlockedExchange64((LONG64*)&_BtAddress, 0))
+		{
+			DbgPrint("%s<%p>(%p [%I64X])\n", __FUNCTION__, this, ChannelHandle, BtAddress);
+			_Fdo->CloseChannel(BtAddress, ChannelHandle);
+		}
 	}
 	SetNotActive();
 }
@@ -104,7 +107,6 @@ void ConnectionContext::IndicationCallback(
 		break;
 
 	case IndicationRemoteDisconnect:
-		_BtAddress = 0;
 		DbgPrint("Disconnect(%s, CloseNow=%X)\n", 
 			GetName(Parameters->Parameters.Disconnect.Reason), Parameters->Parameters.Disconnect.CloseNow);
 

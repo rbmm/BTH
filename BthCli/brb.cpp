@@ -320,7 +320,7 @@ void FDO::CloseChannel(BTH_ADDR BtAddress, L2CAP_CHANNEL_HANDLE ChannelHandle)
 		Brb->BrbL2caCloseChannel.BtAddress = BtAddress;
 		Brb->BrbL2caCloseChannel.ChannelHandle = ChannelHandle;
 
-		DbgPrint("CloseChannel(%p [%I64x])\n", ChannelHandle, BtAddress);
+		DbgPrint("%s(%p [%I64x])\n", __FUNCTION__, ChannelHandle, BtAddress);
 
 		SendBrbAsync(Brb);
 	}
