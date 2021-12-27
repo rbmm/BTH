@@ -44,16 +44,20 @@ NTSTATUS CALLBACK AddDevice(PDRIVER_OBJECT DriverObject, PDEVICE_OBJECT Physical
 
 VOID NTAPI DriverUnload(PDRIVER_OBJECT DriverObject)
 {
+#ifdef _KPDB_
 	CModule::Cleanup();
+#endif
 	DbgPrint("DriverUnload(%p)", DriverObject);
 }
 
+#ifdef _KPDB_
 static const ULONG ha[] = {
 	0x045CED30, // "bthport.sys"
 	0x970F5920, // "bthenum.sys"
 	0x9A57BC6B, // "ntoskrnl.exe"
 	0x67DEC51F, // "wdf01000.sys"
 };
+#endif
 
 NTSTATUS NTAPI DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 {
@@ -64,12 +68,16 @@ NTSTATUS NTAPI DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING Registry
 	DriverObject->DriverExtension->AddDevice = AddDevice;
 	DriverObject->DriverUnload = DriverUnload;
 
+#ifdef _KPDB_
 	NTSTATUS status = TestIoMiniPacket();
 	if (0 <= status)
 	{
 		LoadNtModule(_countof(ha), ha);
 	}
 	return status;
+#else
+	return TestIoMiniPacket();
+#endif
 }
 
 _NT_END

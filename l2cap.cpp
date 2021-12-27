@@ -11,7 +11,7 @@ void DumpBytes(const UCHAR* pb, ULONG cb);
 
 ULONG OpenDevice(_Out_ PHANDLE phFile, _In_ const GUID* InterfaceClassGuid);
 
-struct __declspec(uuid("11112222-3333-4444-5555-666677778888")) TestItf;
+struct __declspec(uuid("ADF8EB1B-0718-4366-A418-BB88F175D361")) BTH_CLI_GUID;
 
 void L2capSocket::IOCompletionRoutine(CDataPacket* packet, DWORD Code, NTSTATUS status, ULONG_PTR Information, PVOID Pointer)
 {
@@ -95,7 +95,7 @@ NTSTATUS L2capSocket::Disconnect()
 HRESULT L2capSocket::Create()
 {
 	HANDLE hFile;
-	if (ULONG err = OpenDevice(&hFile, &__uuidof(TestItf)))
+	if (ULONG err = OpenDevice(&hFile, &__uuidof(BTH_CLI_GUID)))
 	{
 		return HRESULT_FROM_WIN32(err);
 	}

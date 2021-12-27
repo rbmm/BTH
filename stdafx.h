@@ -15,4 +15,6 @@ _NT_BEGIN
 #include <ws2bth.h>
 #include <bthddi.h>
 #include <bthioctl.h>
+#include <bluetoothapis.h>
+#include <setupapi.h>
 _NT_END

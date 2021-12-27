@@ -909,10 +909,12 @@ void bthDlg(HWND hwndDlg)
 #include "CertServer.h"
 void InsertSC(HWND hwndDlg);
 
-void Install();
+HRESULT Install();
 BOOL BuildSdp(USHORT Psm, UCHAR Cn);
 void L2Test();
 void ImportCert(HWND hwndDlg);
+HRESULT Uninstall();
+NTSTATUS IsInstalled();
 
 DWORD HashString(PCSTR lpsz, DWORD hash = 0)
 {
@@ -925,33 +927,45 @@ void PrintHash(PCSTR lpsz)
 	DbgPrint("0x%08X, // \"%s\"\n", HashString(lpsz), lpsz);
 }
 
-static ULONG ha[] = {
-	0x045CED30, // "bthport.sys"
-	0x970F5920, // "bthenum.sys"
-	0x9A57BC6B, // "ntoskrnl.exe"
-	0x67DEC51F, // "wdf01000.sys"
-};
-
-
 INT_PTR CALLBACK StartDialogProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
 	switch (uMsg)
 	{
 	case WM_COMMAND:
+		void (*fn)(HWND) = 0;
 		switch (wParam)
 		{
 		case IDCANCEL:
 			EndDialog(hwndDlg, lParam);
 			break;
 		case IDC_BUTTON1:
-			ImportCert(hwndDlg);
+			fn = ImportCert;
 			break;
 		case IDC_BUTTON2:
-			InsertSC(hwndDlg);
+			fn = InsertSC;
 			break;
 		case IDC_BUTTON3:
-			bthDlg(hwndDlg);
+			fn = bthDlg;
 			break;
+		case IDC_BUTTON4:
+			if (0 > IsInstalled())
+			{
+				ShowErrorBox(hwndDlg,  Install(), L"Install", MB_OK);
+			}
+			else
+			{
+				ShowErrorBox(hwndDlg, STATUS_ALREADY_COMPLETE|FACILITY_NT_BIT, L"already installed", MB_ICONINFORMATION);
+			}
+			break;
+		case IDC_BUTTON5:
+			lParam = Uninstall();
+			break;
+		}
+		if (fn)
+		{
+			ShowWindow(hwndDlg, SW_HIDE);
+			fn(hwndDlg);
+			SetWindowPos(hwndDlg, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_SHOWWINDOW);
 		}
 		break;
 	}
@@ -971,9 +985,6 @@ void CALLBACK ep(void*)
 			WSACleanup();
 		}
 		CoUninitialize();
-	}
-	if (IsDebuggerPresent()){
-
 	}
 
 	IO_RUNDOWN::g_IoRundown.BeginRundown();

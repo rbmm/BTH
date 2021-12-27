@@ -35,7 +35,7 @@ NTSTATUS SyncIoctl(_In_ HANDLE FileHandle,
 				   _In_ ULONG OutputBufferLength,
 				   _Out_opt_ PULONG_PTR Information = 0);
 
-struct __declspec(uuid("00112233-4455-6677-8899-aabbccddeeff")) MyServiceClass;
+struct __declspec(uuid("ADF8EB1B-0718-4366-A418-BB88F175D360")) MyServiceClass;
 
 inline NTSTATUS UnregisterService(_In_ HANDLE hDevice, _In_ HANDLE_SDP hRecord)
 {

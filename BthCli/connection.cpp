@@ -84,7 +84,9 @@ void ConnectionContext::IndicationCallback(
 	_In_ PINDICATION_PARAMETERS Parameters
 	)
 {
+#ifdef _KPDB_
 	DumpStack(__FUNCTION__);
+#endif
 
 	DbgPrint("%s<%p>[%x](%s) [%I64X]\n", __FUNCTION__, this, _nRefCount, GetName(Indication), Parameters->BtAddress);
 

@@ -4,7 +4,7 @@ _NT_BEGIN
 
 #include "sdp.h"
 
-C_ASSERT(sizeof(SDP_NODE)==0x28);
+//C_ASSERT(sizeof(SDP_NODE)==0x28);
 
 struct SDP_NODE_ARRAY 
 {

@@ -45,7 +45,7 @@ NTSTATUS FDO::PassDownSynchronous(PIRP Irp, PIO_STACK_LOCATION IrpSp)
 	return status;
 }
 
-struct __declspec(uuid("11112222-3333-4444-5555-666677778888")) TestItf;
+struct __declspec(uuid("ADF8EB1B-0718-4366-A418-BB88F175D361")) TestItf;
 
 NTSTATUS SyncIoctl(
 				   _In_  ULONG IoControlCode,
@@ -261,7 +261,7 @@ NTSTATUS FDO::OnCreate(PDEVICE_OBJECT DeviceObject, PFILE_OBJECT FileObject, PIO
 
 NTSTATUS FDO::OnCleanup(PDEVICE_OBJECT DeviceObject, PFILE_OBJECT FileObject)
 {
-	DbgPrint("%s<%p>\n", __FUNCTION__, this);
+	DbgPrint("%s<%p>(%p)\n", __FUNCTION__, this, FileObject);
 
 	if (!FileObject || DeviceObject != FileObject->FsContext2)
 	{
@@ -275,7 +275,7 @@ NTSTATUS FDO::OnCleanup(PDEVICE_OBJECT DeviceObject, PFILE_OBJECT FileObject)
 
 NTSTATUS FDO::OnClose(PDEVICE_OBJECT DeviceObject, PFILE_OBJECT FileObject)
 {
-	DbgPrint("%s<%p>\n", __FUNCTION__, this);
+	DbgPrint("%s<%p>(%p)\n", __FUNCTION__, this, FileObject);
 
 	if (!FileObject || DeviceObject != FileObject->FsContext2)
 	{
