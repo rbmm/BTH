@@ -55,7 +55,7 @@ class InsertScDlg : public BthDlg
 	ScSocket* _pSocket = 0;
 	PBTH_DEVICE_INFO_LIST _pList = 0;
 	LONG _dwInquireCount = 0;
-	int _dwIndex;
+	int _dwIndex = -1;
 
 	virtual void OnPortRemoved(BTH_RADIO* port)
 	{
@@ -226,7 +226,7 @@ __0:
 							if (BDIF_ADDRESS & flags)
 							{
 								status = 0;
-								ConnectToSDP(hwndDlg, hDevice, bthId, deviceList->address);
+								ConnectToSDP(hwndDlg, hDevice, bthId, deviceList);
 							}
 
 						} while (deviceList++, --numOfDevices);
@@ -247,17 +247,19 @@ __0:
 		}
 	}
 
-	void ConnectToSDP(HWND hwndDlg, HANDLE hDevice, ULONG bthId, BTH_ADDR address)
+	void ConnectToSDP(HWND hwndDlg, HANDLE hDevice, ULONG bthId, PBTH_DEVICE_INFO deviceInfo)
 	{
 		if (BTH_REQUEST* irp = AllocateRequest(hwndDlg, bthId, BTH_REQUEST::c_cnt, sizeof(BTH_SDP_CONNECT)))
 		{
 			PBTH_SDP_CONNECT psc = (PBTH_SDP_CONNECT)irp->Data;
+			BTH_ADDR address = deviceInfo->address;
 			psc->bthAddress = address;
 			psc->fSdpConnect = 0;
 			psc->hConnection = 0;
 			psc->requestTimeout = SDP_REQUEST_TO_DEFAULT;
 
-			irp->btAddr = address;
+			//irp->btAddr = address;
+			irp->deviceInfo = deviceInfo;
 
 			NTSTATUS status = NtDeviceIoControlFile(hDevice, 0, 0, irp, irp, 
 				IOCTL_BTH_SDP_CONNECT, psc, sizeof(BTH_SDP_CONNECT), psc, sizeof(BTH_SDP_CONNECT));
@@ -271,7 +273,9 @@ __0:
 	{
 		PBTH_SDP_CONNECT psc = (PBTH_SDP_CONNECT)irp->Data;
 		NTSTATUS status = irp->Status;
-		BTH_ADDR btAddr = irp->btAddr;
+		PBTH_DEVICE_INFO deviceInfo = irp->deviceInfo;
+		BTH_ADDR btAddr = deviceInfo->address;
+
 		log(L"SDP_CONNECT to [%I64X] = %X [%u ms]\r\n", btAddr, status, irp->GetIoTime());
 
 		if (0 > status)
@@ -293,7 +297,8 @@ __0:
 		if (irp = AllocateRequest(hwndDlg, bthId, BTH_REQUEST::c_srh, FIELD_OFFSET(BTH_SDP_STREAM_RESPONSE, response[0x200])))
 		{
 			irp->hConnection = psc->hConnection;
-			irp->btAddr = btAddr;
+			//irp->btAddr = btAddr;
+			irp->deviceInfo = deviceInfo;
 
 			BTH_SDP_SERVICE_ATTRIBUTE_SEARCH_REQUEST sss = { 
 				psc->hConnection, 0, {{ {__uuidof(MyServiceClass)}, SDP_ST_UUID128}},
@@ -315,7 +320,9 @@ __0:
 	void OnSdpSearch(HWND hwndDlg, BTH_REQUEST* irp)
 	{
 		NTSTATUS status = irp->Status;
-		BTH_ADDR btAddr = irp->btAddr;
+		PBTH_DEVICE_INFO deviceInfo = irp->deviceInfo;
+		BTH_ADDR btAddr = deviceInfo->address;
+
 		log(L"SERVICE_SEARCH in [%I64X] = %X [%u ms]\r\n", btAddr, status, irp->GetIoTime());
 
 		ULONG bthId = irp->bthId;
@@ -358,44 +365,29 @@ __0:
 		{
 			log(L"!! Found Device [%I64X:%X] !!\r\n", btAddr, Port);
 
-			if (PBTH_DEVICE_INFO_LIST pList = _pList)
+			deviceInfo->classOfDevice = Port;
+			int i;
+			WCHAR name[BTH_MAX_NAME_SIZE];
+			if (deviceInfo->flags & BDIF_NAME)
 			{
-				if (ULONG numOfDevices = pList->numOfDevices)
+				i = MultiByteToWideChar(CP_UTF8, 0, deviceInfo->name, MAXULONG, name, _countof(name));
+			}
+			else
+			{
+				i = swprintf_s(name, _countof(name), L"[%I64X]", btAddr);
+			}
+
+			HWND hwndCB = GetDlgItem(hwndDlg, IDC_COMBO2);
+
+			if (0 < i && 0 <= (i = ComboBox_AddString(hwndCB, name)))
+			{
+				ComboBox_SetItemData(hwndCB, i, (LPARAM)deviceInfo);
+				ComboBox_SetCurSel(hwndCB, i);
+
+				if (i == 0)
 				{
-					PBTH_DEVICE_INFO deviceList = pList->deviceList;
-
-					do 
-					{
-						if (deviceList->address == btAddr)
-						{
-							deviceList->classOfDevice = Port;
-							int i;
-							WCHAR name[BTH_MAX_NAME_SIZE];
-							if (deviceList->flags & BDIF_NAME)
-							{
-								i = MultiByteToWideChar(CP_UTF8, 0, deviceList->name, MAXULONG, name, _countof(name));
-							}
-							else
-							{
-								i = swprintf_s(name, _countof(name), L"[%I64X]", btAddr);
-							}
-
-							HWND hwndCB = GetDlgItem(hwndDlg, IDC_COMBO2);
-
-							if (0 < i && 0 <= (i = ComboBox_AddString(hwndCB, name)))
-							{
-								ComboBox_SetItemData(hwndCB, i, (LPARAM)deviceList);
-								ComboBox_SetCurSel(hwndCB, i);
-
-								if (i == 0)
-								{
-									EnableWindow(hwndCB, TRUE);
-									EnableWindow(GetDlgItem(hwndDlg, IDOK), TRUE);
-								}
-							}
-							break;
-						}
-					} while (deviceList++, --numOfDevices);
+					EnableWindow(hwndCB, TRUE);
+					EnableWindow(GetDlgItem(hwndDlg, IDOK), TRUE);
 				}
 			}
 		}
@@ -608,6 +600,18 @@ __0:
 
 	void Insert(HWND hwndDlg)
 	{
+		if (0 <= _dwIndex)
+		{
+			return ;
+		}
+
+		BCRYPT_KEY_HANDLE hKey = _hKey;
+
+		if (!hKey)
+		{
+			return ;
+		}
+
 		BTH_RADIO* port = GetSelectedPort();
 		
 		if (!port)
@@ -649,7 +653,7 @@ __0:
 
 		if (ScSocket* p = new ScSocket(_hKey, pkn, hwndDlg, port->_id, GetDlgItem(hwndDlg, IDC_EDIT1)))
 		{
-			ComboBox_SetItemData(hwndCB, i, 0), _hKey = 0;
+			ComboBox_SetItemData(hwndCB, i, 0), _hKey = 0, _dwIndex = i;
 
 			if (0 <= (hr = p->Create()))
 			{
@@ -678,6 +682,82 @@ __0:
 			_pSocket = 0;
 			EnableWindow(GetDlgItem(hwndDlg, IDC_BUTTON2), FALSE);
 		}
+	}
+
+	void DeleteSC(HWND hwndDlg)
+	{
+		HWND hwndCB = GetDlgItem(hwndDlg, IDC_COMBO1);
+		int i = ComboBox_GetCurSel(hwndCB);
+		if (i < 0)
+		{
+			return ;
+		}
+		WCHAR name[64];
+		GetWindowTextW(hwndCB, name, _countof(name));
+		if (MessageBoxW(hwndDlg, name, L"Delete ?", MB_YESNO|MB_ICONQUESTION|MB_DEFBUTTON2) != IDYES)
+		{
+			return ;
+		}
+
+		PSTR utf8 = 0;
+		ULONG cb = 0;
+		while (cb = WideCharToMultiByte(CP_UTF8, 0, name, MAXULONG, utf8, cb, 0, 0))
+		{
+			if (utf8)
+			{
+				PWSTR filename = 0;
+				ULONG cch = 0;
+				while (CryptBinaryToStringW((PUCHAR)utf8, cb, CRYPT_STRING_BASE64|CRYPT_STRING_NOCRLF, filename, &cch))
+				{
+					if (filename)
+					{
+						FixBase64(filename, cch);
+
+						UNICODE_STRING ObjectName;
+						OBJECT_ATTRIBUTES oa = { sizeof(oa), 0, &ObjectName };
+						RtlInitUnicodeString(&ObjectName, filename);
+
+						NTSTATUS status = OpenFolder(&oa.RootDirectory);
+
+						if (0 <= status)
+						{
+							status = ZwDeleteFile(&oa);
+							NtClose(oa.RootDirectory);
+						}
+
+						if (0 > status)
+						{
+							ShowErrorBox(hwndDlg, status | FACILITY_NT_BIT, L"fail delete SC", MB_ICONHAND);
+						}
+						else
+						{
+							if (PVOID pv = (PVOID)ComboBox_GetItemData(hwndCB, i))
+							{
+								delete pv;
+							}
+							i = ComboBox_DeleteString(hwndCB, i);
+							if (0 < i)
+							{
+								ComboBox_SetCurSel(hwndCB, 0);
+							}
+							MessageBoxW(hwndDlg, name, L"Smart card deleted !", MB_ICONINFORMATION);
+							if (0 >= i)
+							{
+								EndDialog(hwndDlg, 0);
+							}
+						}
+						break;
+					}
+
+					filename = (PWSTR)alloca(cch * sizeof(WCHAR));
+				}
+
+				break;
+			}
+
+			utf8 = (PSTR)alloca(cb);
+		}
+
 	}
 
 	virtual INT_PTR DialogProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
@@ -742,14 +822,22 @@ __0:
 			case IDC_BUTTON1:
 				StartInquire(hwndDlg);
 				break;
+
+			case IDC_BUTTON3:
+				DeleteSC(hwndDlg);
+				break;
 			}
 			return 0;
 
 		case WM_RES:
+			if (0 > _dwIndex || _hKey)
+			{
+				__debugbreak();
+			}
 			_hKey = (BCRYPT_KEY_HANDLE)wParam;
 			if (HWND hwndCB = GetDlgItem(hwndDlg, IDC_COMBO1))
 			{
-				ComboBox_SetItemData(hwndCB, _dwIndex, lParam);
+				ComboBox_SetItemData(hwndCB, _dwIndex, lParam), _dwIndex = -1;
 				if (GetBthCount() && ComboBox_GetCount(GetDlgItem(hwndDlg, IDC_COMBO2)))
 				{
 					EnableWindow(GetDlgItem(hwndDlg, IDOK), TRUE);

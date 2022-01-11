@@ -3,7 +3,7 @@
 struct BTH_REQUEST : IO_STATUS_BLOCK 
 {
 	ULONGLONG hConnection;
-	BTH_ADDR btAddr;
+	PBTH_DEVICE_INFO deviceInfo;
 	HWND hwnd;
 	ULONG code;
 	ULONG bthId;

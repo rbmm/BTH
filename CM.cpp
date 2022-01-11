@@ -3,7 +3,6 @@
 _NT_BEGIN
 
 #include "CM.h"
-
 extern volatile const UCHAR guz;
 
 CONFIGRET GetFriendlyName(_Out_ PWSTR* ppszName, _In_ DEVINST dnDevInst)

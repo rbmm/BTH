@@ -597,7 +597,7 @@ __0:
 							if (BDIF_ADDRESS & flags)
 							{
 								status = 0;
-								ConnectToSDP(hwndDlg, hDevice, bthId, deviceList->address);
+								ConnectToSDP(hwndDlg, hDevice, bthId, deviceList);
 							}
 
 						} while (deviceList++, --numOfDevices);
@@ -618,17 +618,18 @@ __0:
 		}
 	}
 
-	void ConnectToSDP(HWND hwndDlg, HANDLE hDevice, ULONG bthId, BTH_ADDR address)
+	void ConnectToSDP(HWND hwndDlg, HANDLE hDevice, ULONG bthId, PBTH_DEVICE_INFO deviceInfo)
 	{
 		if (BTH_REQUEST* irp = AllocateRequest(hwndDlg, bthId, BTH_REQUEST::c_cnt, sizeof(BTH_SDP_CONNECT)))
 		{
+			BTH_ADDR address = deviceInfo->address;
 			PBTH_SDP_CONNECT psc = (PBTH_SDP_CONNECT)irp->Data;
 			psc->bthAddress = address;
 			psc->fSdpConnect = 0;
 			psc->hConnection = 0;
 			psc->requestTimeout = SDP_REQUEST_TO_DEFAULT;
 
-			irp->btAddr = address;
+			irp->deviceInfo = deviceInfo;
 
 			NTSTATUS status = NtDeviceIoControlFile(hDevice, 0, 0, irp, irp, 
 				IOCTL_BTH_SDP_CONNECT, psc, sizeof(BTH_SDP_CONNECT), psc, sizeof(BTH_SDP_CONNECT));
@@ -642,7 +643,8 @@ __0:
 	{
 		PBTH_SDP_CONNECT psc = (PBTH_SDP_CONNECT)irp->Data;
 		NTSTATUS status = irp->Status;
-		BTH_ADDR btAddr = irp->btAddr;
+		PBTH_DEVICE_INFO deviceInfo = irp->deviceInfo;
+		BTH_ADDR btAddr = deviceInfo->address;
 		log(L"SDP_CONNECT to [%I64X] = %X [%u ms]\r\n", btAddr, status, irp->GetIoTime());
 
 		if (0 > status)
@@ -664,7 +666,7 @@ __0:
 		if (irp = AllocateRequest(hwndDlg, bthId, BTH_REQUEST::c_srh, FIELD_OFFSET(BTH_SDP_STREAM_RESPONSE, response[0x200])))
 		{
 			irp->hConnection = psc->hConnection;
-			irp->btAddr = btAddr;
+			irp->deviceInfo = deviceInfo;
 
 			BTH_SDP_SERVICE_ATTRIBUTE_SEARCH_REQUEST sss = { 
 				psc->hConnection, 0, {{ {__uuidof(MyServiceClass)}, SDP_ST_UUID128}},
@@ -686,7 +688,8 @@ __0:
 	void OnSdpSearch(HWND hwndDlg, BTH_REQUEST* irp)
 	{
 		NTSTATUS status = irp->Status;
-		BTH_ADDR btAddr = irp->btAddr;
+		PBTH_DEVICE_INFO deviceInfo = irp->deviceInfo;
+		BTH_ADDR btAddr = deviceInfo->address;
 		log(L"SERVICE_SEARCH in [%I64X] = %X [%u ms]\r\n", btAddr, status, irp->GetIoTime());
 
 		ULONG bthId = irp->bthId;
@@ -728,45 +731,30 @@ __0:
 		{
 			log(L"!! Found Device [%I64X:%X] !!\r\n", btAddr, Port);
 
-			if (PBTH_DEVICE_INFO_LIST pList = _pList)
+			deviceInfo->classOfDevice = Port;
+			int i;
+			WCHAR name[BTH_MAX_NAME_SIZE];
+			if (deviceInfo->flags & BDIF_NAME)
 			{
-				if (ULONG numOfDevices = pList->numOfDevices)
+				i = MultiByteToWideChar(CP_UTF8, 0, deviceInfo->name, MAXULONG, name, _countof(name));
+			}
+			else
+			{
+				i = swprintf_s(name, _countof(name), L"[%I64X]", btAddr);
+			}
+
+			if (0 < i && 0 <= (i = ComboBox_AddString(_hwndAddress, name)))
+			{
+				ComboBox_SetItemData(_hwndAddress, i, (LPARAM)deviceInfo);
+				ComboBox_SetCurSel(_hwndAddress, i);
+
+				if (i == 0)
 				{
-					PBTH_DEVICE_INFO deviceList = pList->deviceList;
-
-					do 
+					EnableWindow(_hwndAddress, TRUE);
+					if (!_pc) 
 					{
-						if (deviceList->address == btAddr)
-						{
-							deviceList->classOfDevice = Port;
-							int i;
-							WCHAR name[BTH_MAX_NAME_SIZE];
-							if (deviceList->flags & BDIF_NAME)
-							{
-								i = MultiByteToWideChar(CP_UTF8, 0, deviceList->name, MAXULONG, name, _countof(name));
-							}
-							else
-							{
-								i = swprintf_s(name, _countof(name), L"[%I64X]", btAddr);
-							}
-
-							if (0 < i && 0 <= (i = ComboBox_AddString(_hwndAddress, name)))
-							{
-								ComboBox_SetItemData(_hwndAddress, i, (LPARAM)deviceList);
-								ComboBox_SetCurSel(_hwndAddress, i);
-
-								if (i == 0)
-								{
-									EnableWindow(_hwndAddress, TRUE);
-									if (!_pc) 
-									{
-										EnableWindow(GetDlgItem(hwndDlg, ID_CONNECT), TRUE);
-									}
-								}
-							}
-							break;
-						}
-					} while (deviceList++, --numOfDevices);
+						EnableWindow(GetDlgItem(hwndDlg, ID_CONNECT), TRUE);
+					}
 				}
 			}
 		}
@@ -964,7 +952,7 @@ INT_PTR CALLBACK StartDialogProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM 
 		if (fn)
 		{
 			ShowWindow(hwndDlg, SW_HIDE);
-			fn(hwndDlg);
+			fn(HWND_DESKTOP);
 			SetWindowPos(hwndDlg, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE|SWP_NOSIZE|SWP_SHOWWINDOW);
 		}
 		break;

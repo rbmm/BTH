@@ -298,4 +298,39 @@ void UnFixBase64(PWSTR pszString, ULONG cch)
 	}
 }
 
+#if 0
+ULONG BthRegisterService(LPCGUID lpServiceClassId, PCWSTR ServiceName, PSOCKADDR_BTH asi)
+{
+	ULONG SdpVersion = BTH_SDP_VERSION;
+	HANDLE hRecord;
+	BTH_SET_SERVICE bss = { &SdpVersion, &hRecord };
+
+	BLOB blob = { sizeof(bss), (PUCHAR)&bss };
+
+	CSADDR_INFO csa = { { (PSOCKADDR)asi, sizeof(SOCKADDR_BTH) }, {}, SOCK_STREAM, BTHPROTO_RFCOMM };
+
+	WSAQUERYSET wqs = { sizeof(wqs) };
+	wqs.lpszServiceInstanceName = const_cast<PWSTR>(ServiceName); // not optional !
+	wqs.lpServiceClassId = const_cast<PGUID>(lpServiceClassId);
+	wqs.dwNameSpace = NS_BTH;
+	wqs.dwNumberOfCsAddrs = 1;
+	wqs.lpcsaBuffer = &csa;
+	//wqs.lpBlob = &blob;
+
+	return WSASetService(&wqs, RNRSERVICE_REGISTER, 0) ? WSAGetLastError() : NOERROR;
+}
+
+struct __declspec(uuid("00112233-4455-6677-8899-aabbccddeeff")) MyServiceClass;
+
+void testR()
+{
+	SOCKADDR_BTH asi = { AF_BTH, 0, {}, BT_PORT_ANY };
+	SOCKET s = WSASocket(AF_BTH, SOCK_STREAM, BTHPROTO_RFCOMM, 0, 0, WSA_FLAG_NO_HANDLE_INHERIT|WSA_FLAG_OVERLAPPED);
+	bind(s, (PSOCKADDR)&asi, sizeof(asi));
+	int len = sizeof(asi);
+	getsockname(s, (PSOCKADDR)&asi, &len);
+	BthRegisterService(&__uuidof(MyServiceClass), L"ABCD", &asi);
+}
+#endif
+
 _NT_END

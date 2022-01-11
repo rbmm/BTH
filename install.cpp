@@ -258,7 +258,7 @@ BOOL GetKeyInfo(HANDLE hKey, ULONG& SubKeys, ULONG& MaxNameLen)
 	return FALSE;
 }
 
-NTSTATUS DeleteKey(PCOBJECT_ATTRIBUTES poa, ULONG Level = 0, void (*fn)(HANDLE hKey, ULONG Level, PVOID Context) = 0, PVOID Context = 0)
+NTSTATUS DeleteKey(PCOBJECT_ATTRIBUTES poa, ULONG Level = 0, BOOL (*fn)(PCUNICODE_STRING ObjectName, HANDLE hKey, ULONG Level, PVOID Context) = 0, PVOID Context = 0)
 {
 	UNICODE_STRING ObjectName;
 
@@ -266,43 +266,45 @@ NTSTATUS DeleteKey(PCOBJECT_ATTRIBUTES poa, ULONG Level = 0, void (*fn)(HANDLE h
 
 	NTSTATUS status = ZwOpenKeyEx(&oa.RootDirectory, KEY_READ|DELETE|KEY_WOW64_64KEY, const_cast<POBJECT_ATTRIBUTES>(poa), REG_OPTION_BACKUP_RESTORE);
 
-	//DbgPrint("[%x] \"%wZ\" = %x\n", Level, poa->ObjectName, status);
+	DbgPrint("open:[%x] \"%wZ\" = %x\n", Level, poa->ObjectName, status);
 
 	if (0 <= status)
 	{
-		if (fn) fn(oa.RootDirectory, Level, Context);
-
-		ULONG SubKeys, MaxNameLen;
-
-		if (GetKeyInfo(oa.RootDirectory, SubKeys, MaxNameLen) && SubKeys)
+		if (!fn || fn(poa->ObjectName, oa.RootDirectory, Level, Context))
 		{
-			ObjectName.MaximumLength = (USHORT)MaxNameLen;
+			ULONG SubKeys, MaxNameLen;
 
-			if (PKEY_BASIC_INFORMATION pkni = (PKEY_BASIC_INFORMATION)_malloca(
-				MaxNameLen += FIELD_OFFSET(KEY_BASIC_INFORMATION, Name)))
+			if (GetKeyInfo(oa.RootDirectory, SubKeys, MaxNameLen) && SubKeys)
 			{
-				ObjectName.Buffer = pkni->Name;
+				ObjectName.MaximumLength = (USHORT)MaxNameLen;
 
-				Level++;
-
-				do 
+				if (PKEY_BASIC_INFORMATION pkni = (PKEY_BASIC_INFORMATION)_malloca(
+					MaxNameLen += FIELD_OFFSET(KEY_BASIC_INFORMATION, Name)))
 				{
-					if (0 <= ZwEnumerateKey(oa.RootDirectory, 
-						--SubKeys, KeyBasicInformation, pkni, MaxNameLen, (PULONG)&status))
+					ObjectName.Buffer = pkni->Name;
+
+					Level++;
+
+					do 
 					{
-						ObjectName.Length = (USHORT)pkni->NameLength;
-						DeleteKey(&oa, Level, fn, Context);
-					}
+						if (0 <= ZwEnumerateKey(oa.RootDirectory, 
+							--SubKeys, KeyBasicInformation, pkni, MaxNameLen, (PULONG)&status))
+						{
+							ObjectName.Length = (USHORT)pkni->NameLength;
+							DeleteKey(&oa, Level, fn, Context);
+						}
 
-				} while (SubKeys);
+					} while (SubKeys);
 
-				--Level;
+					--Level;
 
-				_freea(pkni);
+					_freea(pkni);
+				}
 			}
-		}
 
-		status = ZwDeleteKey(oa.RootDirectory);
+			status = ZwDeleteKey(oa.RootDirectory);
+			DbgPrint("delete:[%x] \"%wZ\" = %x\n", Level, poa->ObjectName, status);
+		}
 
 		NtClose(oa.RootDirectory);
 	}
@@ -413,7 +415,23 @@ HRESULT Install()
 	return HRESULT_FROM_WIN32(hr);
 }
 
-void DeleteDriverKey(HANDLE hKey, ULONG Level, PVOID Context)
+void UninstallInf()
+{
+	HANDLE hKey;
+	if (0 <= ZwOpenKey(&hKey, KEY_READ, &oa_BthCli))
+	{
+		KEY_VALUE_PARTIAL_INFORMATION kvpi;
+		NTSTATUS status = ZwQueryValueKey(hKey, &INF, KeyValuePartialInformation, &kvpi, sizeof(kvpi), &kvpi.TitleIndex);
+		NtClose(hKey);
+
+		if (0 <= status && kvpi.Type == REG_DWORD && kvpi.DataLength == sizeof(DWORD))
+		{
+			UninstallInf(*(ULONG*)kvpi.Data);
+		}
+	}
+}
+
+BOOL DeleteDriverKey(PCUNICODE_STRING /*ObjectName*/, HANDLE hKey, ULONG Level, PVOID Context)
 {
 	if (Level == 1)
 	{
@@ -429,22 +447,8 @@ void DeleteDriverKey(HANDLE hKey, ULONG Level, PVOID Context)
 			DeleteKey(reinterpret_cast<POBJECT_ATTRIBUTES>(Context));
 		}
 	}
-}
 
-void UninstallInf()
-{
-	HANDLE hKey;
-	if (0 <= ZwOpenKey(&hKey, KEY_READ, &oa_BthCli))
-	{
-		KEY_VALUE_PARTIAL_INFORMATION kvpi;
-		NTSTATUS status = ZwQueryValueKey(hKey, &INF, KeyValuePartialInformation, &kvpi, sizeof(kvpi), &kvpi.TitleIndex);
-		NtClose(hKey);
-
-		if (0 <= status && kvpi.Type == REG_DWORD && kvpi.DataLength == sizeof(DWORD))
-		{
-			UninstallInf(*(ULONG*)kvpi.Data);
-		}
-	}
+	return TRUE;
 }
 
 void DeleteEnum()
@@ -467,15 +471,13 @@ void DeleteService()
 {
 	if (SC_HANDLE hSCManager = OpenSCManager(0, 0, 0))
 	{
-		if (SC_HANDLE hService = OpenServiceW(hSCManager, L"BthCli", DELETE ))
+		if (SC_HANDLE hService = OpenServiceW(hSCManager, L"BthCli", DELETE))
 		{
 			DeleteService(hService);
 			CloseServiceHandle(hService);
 		}
 		CloseServiceHandle(hSCManager);
 	}
-
-	DeleteKey(&oa_BthCli);
 }
 
 HRESULT Uninstall()
