@@ -98,7 +98,10 @@ void ConnectionContext::IndicationCallback(
 		break;
 
 	case IndicationAddReference:
-		InterlockedIncrementNoFence(&_nRefCount);
+		if (InterlockedIncrementNoFence(&_nRefCount) == 1)
+		{
+			NotifyUserMode(0, IndicationAddReference);
+		}
 		break;
 
 	case IndicationReleaseReference:
