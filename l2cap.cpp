@@ -13,6 +13,24 @@ ULONG OpenDevice(_Out_ PHANDLE phFile, _In_ const GUID* InterfaceClassGuid);
 
 struct __declspec(uuid("ADF8EB1B-0718-4366-A418-BB88F175D361")) BTH_CLI_GUID;
 
+struct _BRB_L2CA_OPEN_CHANNEL_CONTEXT : _BRB_L2CA_OPEN_CHANNEL 
+{
+	NT_IRP* CbIrp;
+};
+
+void ReleaseCbIrp(NT_IRP* CbIrp)
+{
+	LONG ref_count = InterlockedDecrement((PLONG)CbIrp->GetBuf());
+
+	DbgPrint("ReleaseReference(%p)[%x]\n", CbIrp, ref_count);
+
+	if (!ref_count)
+	{
+		DbgPrint("CbIrp: --%p\n", CbIrp);
+		CbIrp->Delete();
+	}
+}
+
 void L2capSocket::IOCompletionRoutine(CDataPacket* packet, DWORD Code, NTSTATUS status, ULONG_PTR Information, PVOID Pointer)
 {
 	DbgPrint("%x: %s<%p>[%.4s](%x %x, %p %p)\n", GetCurrentThreadId(), __FUNCTION__, this, &Code, status, Information, Pointer, packet);
@@ -21,8 +39,11 @@ void L2capSocket::IOCompletionRoutine(CDataPacket* packet, DWORD Code, NTSTATUS 
 	{
 	case c_connect:
 		OnConnect(status, (_BRB_L2CA_OPEN_CHANNEL*)Pointer);
-		Pointer = reinterpret_cast<_BRB_L2CA_OPEN_CHANNEL*>(Pointer)->CallbackContext;
-		goto __0;
+		if (0 > status)
+		{
+			ReleaseCbIrp(reinterpret_cast<_BRB_L2CA_OPEN_CHANNEL_CONTEXT*>(Pointer)->CbIrp);
+		}
+		break;
 	case c_recv:
 		reinterpret_cast<_BRB_L2CA_ACL_TRANSFER*>(Pointer)->Buffer = packet->getData();
 		OnRecv(status, (_BRB_L2CA_ACL_TRANSFER*)Pointer);
@@ -39,19 +60,13 @@ void L2capSocket::IOCompletionRoutine(CDataPacket* packet, DWORD Code, NTSTATUS 
 		{
 		case IndicationRemoteDisconnect:
 			OnDisconnect(status);
+			ReleaseCbIrp(reinterpret_cast<NT_IRP*>(Pointer));
 			break;
 		case IndicationRecvPacket:
 			NeedRecv(status);
 			break;
 		case IndicationReleaseReference:
-__0:
-			status = InterlockedDecrement((PLONG)reinterpret_cast<NT_IRP*>(Pointer)->GetBuf());
-			DbgPrint("ReleaseReference(%p)[%x]\n", Pointer, status);
-			if (!status)
-			{
-				DbgPrint("CbIrp: --%p\n", Pointer);
-				reinterpret_cast<NT_IRP*>(Pointer)->Delete();
-			}
+			ReleaseCbIrp(reinterpret_cast<NT_IRP*>(Pointer));
 			break;
 		case IndicationAddReference:
 			status = InterlockedIncrement((PLONG)reinterpret_cast<NT_IRP*>(Pointer)->GetBuf());
@@ -132,7 +147,7 @@ NTSTATUS L2capSocket::Connect(BTH_ADDR BtAddress, USHORT Psm)
 		{
 			DbgPrint("CbIrp: ++%p\n", CbIrp);
 
-			if (NT_IRP* Irp = new(sizeof(_BRB_L2CA_OPEN_CHANNEL)) NT_IRP(this, c_connect, 0))
+			if (NT_IRP* Irp = new(sizeof(_BRB_L2CA_OPEN_CHANNEL_CONTEXT)) NT_IRP(this, c_connect, 0))
 			{
 				PLONG pRef = (PLONG)CbIrp->NotDelete();
 				*pRef = 1;
@@ -140,16 +155,16 @@ NTSTATUS L2capSocket::Connect(BTH_ADDR BtAddress, USHORT Psm)
 				DbgPrint("Irp=%p\n", Irp);
 				_btAddr = BtAddress;
 
-				_BRB_L2CA_OPEN_CHANNEL* OpenChannel = (_BRB_L2CA_OPEN_CHANNEL*)Irp->SetPointer();
+				_BRB_L2CA_OPEN_CHANNEL_CONTEXT* OpenChannel = (_BRB_L2CA_OPEN_CHANNEL_CONTEXT*)Irp->SetPointer();
 				RtlZeroMemory(OpenChannel, sizeof(_BRB_L2CA_OPEN_CHANNEL));
 
 				OpenChannel->BtAddress = BtAddress;
 				OpenChannel->Psm = Psm;
 				OpenChannel->CallbackContext = CbIrp;
+				OpenChannel->CbIrp = CbIrp;
 
 				status = Irp->CheckNtStatus(NtDeviceIoControlFile(hFile, 0, 0, Irp, Irp, IOCTL_L2CA_OPEN_CHANNEL, 
-					OpenChannel, sizeof(_BRB_L2CA_OPEN_CHANNEL), 
-					OpenChannel, sizeof(_BRB_L2CA_OPEN_CHANNEL)));
+					OpenChannel, sizeof(_BRB_L2CA_OPEN_CHANNEL), OpenChannel, sizeof(_BRB_L2CA_OPEN_CHANNEL)));
 			}
 			else
 			{
