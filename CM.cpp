@@ -48,30 +48,36 @@ CONFIGRET GetFriendlyName(_Out_ PWSTR* ppszName, _In_ PCWSTR pszDeviceInterface)
 		DEVINSTID_W pDeviceID;
 	};
 
-	ULONG cb = 0x80;
-
+	ULONG cb = 0, rcb = 0x80;
 	CONFIGRET cr;
+	PVOID stack = alloca(guz);
 
 	do 
 	{
-		cr = CR_OUT_OF_MEMORY;
-
-		if (buf = new UCHAR[cb])
+		if (cb < rcb)
 		{
-			if (CR_SUCCESS == (cr = CM_Get_Device_Interface_PropertyW(pszDeviceInterface, &DEVPKEY_NAME, &PropertyType, PropertyBuffer, &cb, 0)))
-			{
-				if (PropertyType == DEVPROP_TYPE_STRING)
-				{
-					*ppszName = pszName;
-					return CR_SUCCESS;
-				}
-
-				cr = CR_WRONG_TYPE;
-			}
-			delete [] buf;
+			rcb = cb = RtlPointerToOffset(buf = alloca(rcb - cb), stack);
 		}
 
+		cr = CM_Get_Device_Interface_PropertyW(pszDeviceInterface, 
+			&DEVPKEY_Device_InstanceId, &PropertyType, PropertyBuffer, &rcb, 0);
+
 	} while (cr == CR_BUFFER_SMALL);
+
+	if (cr == CR_SUCCESS)
+	{
+		if (PropertyType != DEVPROP_TYPE_STRING)
+		{
+			return CR_FAILURE;
+		}
+
+		DEVINST dnDevInst;
+
+		if (CR_SUCCESS == (cr = CM_Locate_DevNodeW(&dnDevInst, pDeviceID, CM_LOCATE_DEVNODE_NORMAL)))
+		{
+			return GetFriendlyName(ppszName, dnDevInst);
+		}
+	}
 
 	return cr;
 }
