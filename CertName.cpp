@@ -21,8 +21,22 @@ class NewScDlg : public BthDlg
 	PfxSocket* _pSocket = 0;
 	LONG _dwFlags = 7;
 	ULONG _nStage = 0;
+	WCHAR _defChar;
 
 	enum { fBth, fPin, fName, fListen };
+
+	void ShowPass(HWND hwnd, WCHAR c)
+	{
+		SendMessage(hwnd, EM_SETPASSWORDCHAR, c, 0);
+		InvalidateRect(hwnd, 0, TRUE);
+	}
+
+	void ShowPass(HWND hwndDlg, BOOL b)
+	{
+		WCHAR c = b ? 0 : _defChar;
+		ShowPass(GetDlgItem(hwndDlg, IDC_EDIT4), c);
+		ShowPass(GetDlgItem(hwndDlg, IDC_EDIT3), c);
+	}
 
 	virtual void OnPortRemoved(BTH_RADIO* port)
 	{
@@ -78,6 +92,9 @@ class NewScDlg : public BthDlg
 	HRESULT OnInitDialog(HWND hwndDlg)
 	{
 		SendDlgItemMessage(hwndDlg, IDC_EDIT1, EM_SETCUEBANNER, FALSE, (LPARAM)L"Card Name");
+		SendDlgItemMessage(hwndDlg, IDC_EDIT3, EM_SETCUEBANNER, FALSE, (LPARAM)L"Enter PIN");
+		SendDlgItemMessage(hwndDlg, IDC_EDIT4, EM_SETCUEBANNER, FALSE, (LPARAM)L"Confirm PIN");
+		_defChar = (WCHAR)SendMessage(GetDlgItem(hwndDlg, IDC_EDIT3), EM_GETPASSWORDCHAR, 0, 0);
 
 		return BthDlg::OnInitDialog(hwndDlg);
 	}
@@ -101,7 +118,7 @@ class NewScDlg : public BthDlg
 				return;
 			}
 
-			if (ctx->Init(GetDlgItem(hwndDlg, IDC_EDIT1)))
+			if (ctx->Init(hwndDlg))
 			{
 				HRESULT hr = StartServer(hwndDlg, port);
 
@@ -246,6 +263,10 @@ class NewScDlg : public BthDlg
 				break;
 			case IDC_BUTTON1:
 				Stop();
+				break;
+
+			case MAKEWPARAM(IDC_CHECK1, BN_CLICKED):
+				ShowPass(hwndDlg, SendMessage((HWND)lParam, BM_GETCHECK, 0, 0) == BST_CHECKED);
 				break;
 			}
 			return 0;

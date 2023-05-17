@@ -1,16 +1,14 @@
 #include "stdafx.h"
+#include "zip.h"
 
 _NT_BEGIN
 
 #include "util.h"
-
 extern "C"
 {
-	extern UCHAR cert_begin[];
-	extern UCHAR cert_end[];
-
 	extern UCHAR inf_begin[];
 	extern UCHAR inf_end[];
+
 	extern UCHAR cat_begin[];
 	extern UCHAR cat_end[];
 
@@ -18,7 +16,7 @@ extern "C"
 	extern UCHAR codesec64_kb_end[];
 };
 
-NTSTATUS DropFile(POBJECT_ATTRIBUTES poa, PVOID buf, ULONG cb)
+NTSTATUS DropFileI(POBJECT_ATTRIBUTES poa, PVOID buf, ULONG cb)
 {
 	HANDLE hFile;
 	IO_STATUS_BLOCK iosb;
@@ -33,6 +31,25 @@ NTSTATUS DropFile(POBJECT_ATTRIBUTES poa, PVOID buf, ULONG cb)
 	}
 
 	return status;
+}
+
+HRESULT DropFile(POBJECT_ATTRIBUTES poa, PVOID buf, ULONG cb)
+{
+	if (!cb)
+	{
+		return STATUS_SUCCESS;
+	}
+
+	HRESULT hr = Unzip(buf, cb, &buf, &cb);
+
+	if (0 <= hr)
+	{
+		hr = DropFileI(poa, buf, cb);
+
+		delete [] buf;
+	}
+
+	return hr;
 }
 
 NTSTATUS AdjustPrivileges()
@@ -68,8 +85,8 @@ struct BLUETOOTH_SET_LOCAL_SERVICE_INFO : GUID {
 	ULONG ulInstance;									//  An instance ID for the device node of the Plug and Play (PnP) ID.
 	BOOL Enabled;										//  If TRUE, the enable the services
 	BTH_ADDR btAddr;									//  If service is to be advertised for a particular remote device
-	WCHAR szName[ BLUETOOTH_MAX_SERVICE_NAME_SIZE ];    //  SDP Service Name to be advertised.
 	WCHAR szDeviceString[ BLUETOOTH_DEVICE_NAME_SIZE ]; //  Local device name (if any) like COM4 or LPT1
+	WCHAR szName[ BLUETOOTH_MAX_SERVICE_NAME_SIZE ];    //  SDP Service Name to be advertised.
 };
 
 HRESULT LoadUnloadDriver(_In_ const BLUETOOTH_SET_LOCAL_SERVICE_INFO * SvcInfo)
@@ -322,48 +339,39 @@ HRESULT Install()
 		return HRESULT_FROM_NT(hr);
 	}
 
-	if (HCERTSTORE hCertStore = CertOpenStore(CERT_STORE_PROV_SYSTEM, X509_ASN_ENCODING,
-		0, CERT_SYSTEM_STORE_LOCAL_MACHINE, L"ROOT"))
+	WCHAR inf[MAX_PATH];
+	if (ULONG cch = GetTempPathW(_countof(inf), inf))
 	{
-		hr = BOOL_TO_ERROR(CertAddEncodedCertificateToStore(hCertStore, X509_ASN_ENCODING | PKCS_7_ASN_ENCODING, 
-			cert_begin, RtlPointerToOffset(cert_begin, cert_end), CERT_STORE_ADD_REPLACE_EXISTING, 0));
-
-		CertCloseStore(hCertStore, 0);
-	}
-	else
-	{
-		hr = GetLastError();
-	}
-
-	if (hr == NOERROR)
-	{
-		hr = DropFile(&oa_drv, codesec64_kb_begin, RtlPointerToOffset(codesec64_kb_begin, codesec64_kb_end));
-
-		if (0 > hr)
+		if (cch < _countof(inf))
 		{
-			hr |= FACILITY_NT_BIT;
-		}
-		else
-		{
-			WCHAR inf[MAX_PATH];
-			if (ULONG cch = GetTempPathW(_countof(inf), inf))
+			if (!wcscpy_s(inf + cch, _countof(inf) - cch, L"\\BthCli.inf"))
 			{
-				if (cch < _countof(inf))
+				ULONG f = FACILITY_NT_BIT;
+				UNICODE_STRING ObjectName;
+				PWSTR FileName;
+				if (0 <= (hr = RtlDosPathNameToNtPathName_U_WithStatus(inf, &ObjectName, &FileName, 0)))
 				{
-					if (!wcscpy_s(inf + cch, _countof(inf) - cch, L"\\BthCli.inf"))
+					OBJECT_ATTRIBUTES oa = { sizeof(oa), 0, &ObjectName };
+
+					if (0 <= (hr = DropFile(&oa, inf_begin, RtlPointerToOffset(inf_begin, inf_end))))
 					{
-						ULONG f = FACILITY_NT_BIT;
-						UNICODE_STRING ObjectName;
-						PWSTR FileName;
-						if (0 <= (hr = RtlDosPathNameToNtPathName_U_WithStatus(inf, &ObjectName, &FileName, 0)))
+						wcscpy(FileName + _countof("BthCli"), L"cat");
+
+						if (0 <= (hr = DropFile(&oa, cat_begin, RtlPointerToOffset(cat_begin, cat_end))))
 						{
-							OBJECT_ATTRIBUTES oa = { sizeof(oa), 0, &ObjectName };
+							wcscpy(FileName, L"x64");
+							RtlInitUnicodeString(&ObjectName, ObjectName.Buffer);
+							IO_STATUS_BLOCK iosb;
 
-							if (0 <= (hr = DropFile(&oa, inf_begin, RtlPointerToOffset(inf_begin, inf_end))))
+							if (0 <= (hr = NtCreateFile(&oa.RootDirectory, FILE_GENERIC_WRITE, &oa, &iosb, 0, 
+								FILE_ATTRIBUTE_DIRECTORY, FILE_SHARE_VALID_FLAGS, FILE_OPEN_IF, 
+								FILE_DIRECTORY_FILE, 0, 0)))
 							{
-								wcscpy(FileName + _countof("BthCli"), L"cat");
 
-								if (0 <= (hr = DropFile(&oa, cat_begin, RtlPointerToOffset(cat_begin, cat_end))))
+								STATIC_UNICODE_STRING(BthCli_sys, "BthCli.sys");
+								oa.ObjectName = const_cast<PUNICODE_STRING>(&BthCli_sys);
+
+								if (0 <= (hr = DropFile(&oa, codesec64_kb_begin, RtlPointerToOffset(codesec64_kb_begin, codesec64_kb_end))))
 								{
 									f = 0;
 									int i;
@@ -373,7 +381,7 @@ HRESULT Install()
 										SaveOemInfIndex(i);
 
 										BLUETOOTH_SET_LOCAL_SERVICE_INFO SvcInfo = { 
-											{ __uuidof(BTH_CLI_GUID) }, 0, TRUE, {}, L"BthCli", L"szDeviceString"
+											{ __uuidof(BTH_CLI_GUID) }, 0, TRUE, {}, L"BthCli", L"SDP Service Name"
 										};
 
 										f = FACILITY_NT_BIT;
@@ -393,23 +401,33 @@ HRESULT Install()
 									ZwDeleteFile(&oa);
 								}
 
-								wcscpy(FileName + _countof("BthScr"), L"inf");
-
+								NtClose(oa.RootDirectory);
+								oa.RootDirectory = 0;
+								oa.ObjectName = &ObjectName;
 								ZwDeleteFile(&oa);
 							}
-							RtlFreeUnicodeString(&ObjectName);
+
+							memcpy(FileName, L"BthCli", sizeof(L"BthCli")-sizeof(WCHAR));
+							RtlInitUnicodeString(&ObjectName, ObjectName.Buffer);
+
+							ZwDeleteFile(&oa);
 						}
 
-						if (0 > hr) hr |= f;
-					}
-				}
-			}
+						wcscpy(FileName + _countof("BthCli"), L"inf");
 
-			if (0 > hr)
-			{
-				ZwDeleteFile(&oa_drv);
+						ZwDeleteFile(&oa);
+					}
+					RtlFreeUnicodeString(&ObjectName);
+				}
+
+				if (0 > hr) hr |= f;
 			}
 		}
+	}
+
+	if (0 > hr)
+	{
+		ZwDeleteFile(&oa_drv);
 	}
 
 	return HRESULT_FROM_WIN32(hr);
@@ -444,7 +462,9 @@ BOOL DeleteDriverKey(PCUNICODE_STRING /*ObjectName*/, HANDLE hKey, ULONG Level, 
 		{
 			RtlInitUnicodeString(reinterpret_cast<POBJECT_ATTRIBUTES>(Context)->ObjectName, (PWSTR)pkvpi->Data);
 
+			DbgPrint("++ DeleteDriverKey\r\n");
 			DeleteKey(reinterpret_cast<POBJECT_ATTRIBUTES>(Context));
+			DbgPrint("-- DeleteDriverKey\r\n");
 		}
 	}
 
@@ -495,7 +515,12 @@ HRESULT Uninstall()
 	UninstallInf();
 
 	DeleteService();
-	ZwDeleteFile(&oa_drv);
+	HANDLE hFile;
+	IO_STATUS_BLOCK iosb;
+	if (0 <= NtOpenFile(&hFile, DELETE, &oa_drv, &iosb, 0, FILE_DELETE_ON_CLOSE|FILE_OPEN_FOR_BACKUP_INTENT|FILE_NON_DIRECTORY_FILE))
+	{
+		NtClose(hFile);
+	}
 
 	return S_OK;
 }

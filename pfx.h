@@ -2,6 +2,8 @@
 
 class PFX_CONTEXT : public GUID 
 {
+	UCHAR _sha256_pin[0x20];
+	BCRYPT_KEY_HANDLE _hKey = 0;
 	HANDLE _hDirectory = 0;
 	PWSTR _FileName = 0;
 	CDataPacket* _packet = 0;
@@ -41,9 +43,19 @@ public:
 		return _hDirectory;
 	}
 
+	PBYTE GetHash()
+	{
+		return _sha256_pin;
+	}
+
+	BCRYPT_KEY_HANDLE GetKey()
+	{
+		return _hKey;
+	}
+
 	HRESULT OpenFolder();
 
-	BOOL Init(HWND hwndEdit);
+	BOOL Init(HWND hwndDlg);
 
 	NTSTATUS InitUserUuid(_In_ HWND hwndDlg, _In_ UINT nIDDlgItem);
 };

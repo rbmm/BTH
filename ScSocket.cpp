@@ -8,20 +8,55 @@ _NT_BEGIN
 
 ScSocket::~ScSocket()
 {
-	if ((ULONG)SendMessageW(_hwnd, WM_RES, (LPARAM)_hKey, (WPARAM)_pkn) != res_resp)
+	if (_hKey)
 	{
 		BCryptDestroyKey(_hKey);
+	}
+	if (_hExchKey)
+	{
+		BCryptDestroyKey(_hExchKey);
+	}
+	if ((ULONG)SendMessageW(_hwnd, WM_RES, 0, (WPARAM)_pkn) != res_resp)
+	{
 		delete _pkn;
 	}
 	log(L"%s<%p>\r\n", __FUNCTIONW__, this);
 	DbgPrint("%s<%p>\r\n", __FUNCTION__, this);
 }
 
-ScSocket::ScSocket(BCRYPT_KEY_HANDLE hKey, SC_Cntr* pkn, HWND hwnd, ULONG id, HWND hwndLog) : _hKey(hKey), _pkn(pkn), _hwnd(hwnd), _id(id)
+ScSocket::ScSocket(SC_Cntr* pkn, HWND hwnd, ULONG id, HWND hwndLog) : _pkn(pkn), _hwnd(hwnd), _id(id)
 {
 	DbgPrint("%s<%p>\r\n", __FUNCTION__, this);
 	log.Set(hwndLog);
 	log(L"%s<%p>\r\n", __FUNCTIONW__, this);
+}
+
+HRESULT ScSocket::Create()
+{
+	NTSTATUS hr;
+
+	BCRYPT_ALG_HANDLE hAlgorithm;
+	if (0 <= (hr = BCryptOpenAlgorithmProvider(&hAlgorithm, BCRYPT_RSA_ALGORITHM, MS_PRIMITIVE_PROVIDER, 0)))
+	{
+		BCRYPT_KEY_HANDLE hKey;
+		hr = BCryptGenerateKeyPair(hAlgorithm, &hKey, 1024, 0);
+		BCryptCloseAlgorithmProvider(hAlgorithm, 0);
+
+		if (0 <= hr)
+		{
+			if (0 > (hr = BCryptFinalizeKeyPair(hKey, 0)))
+			{
+				BCryptDestroyKey(hKey);
+			}
+			else
+			{
+				_hExchKey = hKey;
+				hr = __super::Create();
+			}
+		}
+	}
+
+	return hr;
 }
 
 void ScSocket::OnDisconnect(NTSTATUS status)
@@ -37,19 +72,45 @@ BOOL ScSocket::OnConnect(NTSTATUS status, _BRB_L2CA_OPEN_CHANNEL* OpenChannel)
 
 	PostMessageW(_hwnd, WM_CONNECT, (WPARAM)OpenChannel->ChannelHandle, status);
 
+	BOOL fOk = FALSE;
+
 	if (0 <= status && OpenChannel->ChannelHandle)
 	{
 		ULONG s = _pkn->GetSize();
+		ULONG s_a = (s + __alignof(BCRYPT_RSAKEY_BLOB) - 1) & ~(__alignof(BCRYPT_RSAKEY_BLOB) - 1);
+		CDataPacket* packet = 0;
+		PBYTE pb = 0;
+		ULONG cb = 0;
 
-		if (CDataPacket* packet = new(s) CDataPacket)
+		while (0 <= (status = BCryptExportKey(_hExchKey, 0, BCRYPT_RSAPUBLIC_BLOB, pb, cb, &cb, 0)))
 		{
-			memcpy(packet->getData(), _pkn, s);
-			packet->setDataSize(s);
-			Send(packet);
+			if (pb)
+			{
+				SC_Cntr* pcc = reinterpret_cast<SC_Cntr*>(packet->getData());
+				memcpy(pcc, _pkn, s);
+				pcc->Tag = SC_Cntr::scTag;
+				packet->setDataSize(s_a + cb);
+				fOk = 0 <= Send(packet);
+				break;
+			}
+
+			if (packet = new(s_a + cb) CDataPacket)
+			{
+				pb = (PBYTE)packet->getData() + s_a;
+			}
+			else
+			{
+				break;
+			}
+		}
+
+		if (packet)
+		{
+			packet->Release();
 		}
 	}
 
-	return TRUE;
+	return fOk;
 }
 
 void DumpBytes(const UCHAR* pb, ULONG cb);
@@ -102,6 +163,7 @@ BOOL ScSocket::PostResponce(BCryptXYZ fn, REMOTE_APDU* p, ULONG len, BCRYPT_PKCS
 		{
 			q->Hint = p->Hint;
 			q->Length = (USHORT)cb;
+			q->opType = p->opType;
 			packet->setDataSize(sizeof(REMOTE_APDU) + cb);
 			break;
 		}
@@ -128,7 +190,9 @@ BOOL ScSocket::PostResponce(BCryptXYZ fn, REMOTE_APDU* p, ULONG len, BCRYPT_PKCS
 			{
 				q = (REMOTE_APDU*)packet->getData();
 				q->Hint = p->Hint;
+				q->opType = p->opType;
 				q->Length = 0;
+				packet->setDataSize(sizeof(REMOTE_APDU));
 			}
 			else
 			{
@@ -141,6 +205,51 @@ BOOL ScSocket::PostResponce(BCryptXYZ fn, REMOTE_APDU* p, ULONG len, BCRYPT_PKCS
 	packet->Release();
 
 	return TRUE;
+}
+
+NTSTATUS ScSocket::ProcessPIN(PUCHAR pb, ULONG cb)
+{
+	log(L"ProcessPIN(%x)\r\n", cb);
+
+	NTSTATUS status = BCryptDecrypt(_hExchKey, pb, cb, 0, 0, 0, pb, cb, &cb, BCRYPT_PAD_PKCS1);
+	if (0 <= status)
+	{
+		if (cb != 0x20)
+		{
+			status = STATUS_INFO_LENGTH_MISMATCH;
+		}
+		else
+		{
+			BCRYPT_ALG_HANDLE hAlgorithm;
+			if (0 <= (status = BCryptOpenAlgorithmProvider(&hAlgorithm, BCRYPT_AES_ALGORITHM, MS_PRIMITIVE_PROVIDER, 0)))
+			{
+				BCRYPT_KEY_HANDLE hKey;
+				status = BCryptGenerateSymmetricKey(hAlgorithm, &hKey, 0, 0, pb, cb, 0);
+				BCryptCloseAlgorithmProvider(hAlgorithm, 0);
+
+				if (0 <= status)
+				{
+					SC_Cntr* pkn = _pkn;
+					pb = pkn->GetPrivKey(&cb);
+					PBYTE pb2 = (PBYTE)alloca(cb);
+					status = BCryptDecrypt(hKey, pb, cb, 0, 0, 0, pb2, cb, &cb, BCRYPT_BLOCK_PADDING);
+					BCryptDestroyKey(hKey);
+
+					if (0 <= status)
+					{
+						if (0 <= (status = BCryptOpenAlgorithmProvider(&hAlgorithm, BCRYPT_RSA_ALGORITHM, MS_PRIMITIVE_PROVIDER, 0)))
+						{
+							status = BCryptImportKeyPair(hAlgorithm, 0, BCRYPT_RSAPRIVATE_BLOB, &_hKey, pb2, cb, 0);
+							BCryptCloseAlgorithmProvider(hAlgorithm, 0);
+						}
+					}
+				}
+			}
+		}
+	}
+
+	log(L"ProcessPIN = %x\r\n", status);
+	return status;
 }
 
 void ScSocket::OnRecv(NTSTATUS status, _BRB_L2CA_ACL_TRANSFER* acl)
@@ -156,9 +265,9 @@ __err:
 	REMOTE_APDU* p = (REMOTE_APDU*)acl->Buffer;
 
 	log(L"%s<%p>(s=%x %x/%x)\r\n", __FUNCTIONW__, this, status, acl->RemainingBufferSize, BufferSize);
-	DumpBytes((PUCHAR)p, acl->BufferSize);
+	//DumpBytes((PUCHAR)p, acl->BufferSize);
 
-	if (BufferSize <= sizeof(REMOTE_APDU))
+	if (BufferSize < sizeof(REMOTE_APDU))
 	{
 		goto __err;
 	}
@@ -174,15 +283,51 @@ __err:
 	{
 	default: goto __err;
 
+	case REMOTE_APDU::opReset:
+		if (_hKey)
+		{
+			BCryptDestroyKey(_hKey);
+			_hKey = 0;
+		}
+		log(L"InUse[%x]\r\n", p->Hint);
+		return;
+
+	case REMOTE_APDU::opPin:
+		if (_hKey)
+		{
+			BCryptDestroyKey(_hKey);
+			_hKey = 0;
+		}
+		if (CDataPacket* packet = new(sizeof(REMOTE_APDU)) CDataPacket)
+		{
+			REMOTE_APDU* q = (REMOTE_APDU*)packet->getData();
+			q->Hint = p->Hint;
+			q->Length = 0; 
+			q->algId = 0 > ProcessPIN(p->buf, len) ? REMOTE_APDU::a_md2 : REMOTE_APDU::a_sha256;
+			q->opType = p->opType;
+			packet->setDataSize(sizeof(REMOTE_APDU));
+			Send(packet);
+			packet->Release();
+			return ;
+		}
+		break;
+
 	case REMOTE_APDU::opEncrypt:
-		if (PostResponce(B_Encrypt, p, len)) return;
+		log(L"Ecrypt %x bytes [%p]\r\n", len, _hKey);
+		if (_hKey && PostResponce(B_Encrypt, p, len)) return;
 		break;
 
 	case REMOTE_APDU::opDecrypt:
-		if (PostResponce(B_Decrypt, p, len)) return;
+		log(L"Decrypt %x bytes [%p]\r\n", len, _hKey);
+		if (_hKey && PostResponce(B_Decrypt, p, len)) return;
 		break;
 
 	case REMOTE_APDU::opSign:
+
+		if (!_hKey)
+		{
+			goto __err;
+		}
 
 		BCRYPT_PKCS1_PADDING_INFO pi = { };
 
@@ -213,7 +358,7 @@ __err:
 
 		if (pi.pszAlgId)
 		{
-			log(L"sign(%s)\r\n", pi.pszAlgId);
+			log(L"sign(%s) %x bytes\r\n", pi.pszAlgId, len);
 			if (PostResponce(B_Sign, p, len, &pi)) return;
 		}
 		break;

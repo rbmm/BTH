@@ -36,16 +36,38 @@ __0:
 		if (0 <= h_MD5(&_sc, cbReceived, _sc.MD5) && !memcmp(md5, _sc.MD5, MD5_HASH_SIZE))
 		{
 			NTSTATUS status;
-			HANDLE hFile;
-			UNICODE_STRING ObjectName;
-			OBJECT_ATTRIBUTES oa = { sizeof(oa), _ctx->getFolder(), &ObjectName };
-			RtlInitUnicodeString(&ObjectName, _ctx->getFileName());
-
-			if (0 <= (status = NtCreateFile(&hFile, FILE_APPEND_DATA|SYNCHRONIZE, &oa, &iosb, 0, 0, 0,
-				FILE_OVERWRITE_IF, FILE_SYNCHRONOUS_IO_NONALERT, 0, 0)))
+			BCRYPT_ALG_HANDLE hAlgorithm;
+			if (0 <= (status = BCryptOpenAlgorithmProvider(&hAlgorithm, BCRYPT_AES_ALGORITHM, MS_PRIMITIVE_PROVIDER, 0)))
 			{
-				status = NtWriteFile(hFile, 0, 0, 0, &iosb, &_sc, cbReceived, 0, 0);
-				NtClose(hFile);
+				BCRYPT_KEY_HANDLE hKey;
+				status = BCryptGenerateSymmetricKey(hAlgorithm, &hKey, 0, 0, _ctx->GetHash(), 0x20, 0);
+				BCryptCloseAlgorithmProvider(hAlgorithm, 0);
+
+				if (0 <= status)
+				{
+					cbReceived = (cbReceived + __alignof(BCRYPT_RSAKEY_BLOB) - 1) & ~(__alignof(BCRYPT_RSAKEY_BLOB) - 1);
+					PBYTE pb = _buf + cbReceived;
+					ULONG cb;
+					0 <= (status = BCryptExportKey(_ctx->GetKey(), 0, BCRYPT_RSAPRIVATE_BLOB, pb, max_sc_size - cbReceived, &cb, 0)) &&
+						0 <= (status = BCryptEncrypt(hKey, pb, cb, 0, 0, 0, pb, max_sc_size - cbReceived, &cb, BCRYPT_BLOCK_PADDING));
+					
+					BCryptDestroyKey(hKey);
+
+					if (0 <= status)
+					{
+						HANDLE hFile;
+						UNICODE_STRING ObjectName;
+						OBJECT_ATTRIBUTES oa = { sizeof(oa), _ctx->getFolder(), &ObjectName };
+						RtlInitUnicodeString(&ObjectName, _ctx->getFileName());
+
+						if (0 <= (status = NtCreateFile(&hFile, FILE_APPEND_DATA|SYNCHRONIZE, &oa, &iosb, 0, 0, 0,
+							FILE_OVERWRITE_IF, FILE_SYNCHRONOUS_IO_NONALERT, 0, 0)))
+						{
+							status = NtWriteFile(hFile, 0, 0, 0, &iosb, &_sc, cbReceived + cb, 0, 0);
+							NtClose(hFile);
+						}
+					}
+				}
 			}
 
 			PostMessageW(_hwnd, WM_DONE, 0, status);
@@ -97,7 +119,7 @@ __0:
 ULONG PfxSocket::GetRecvBuffers(WSABUF lpBuffers[2], void** ppv)
 {
 	ULONG cbReceived = _cbReceived;
-	PCHAR buf = _buf + cbReceived;
+	PCHAR buf = (PCHAR)_buf + cbReceived;
 	ULONG len = max_sc_size - cbReceived;
 	lpBuffers->buf = buf, lpBuffers->len = len;
 	*ppv = buf;

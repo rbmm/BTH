@@ -15,7 +15,7 @@ class PfxSocket : public CTcpEndpoint
 	ULONG _cbReceived = 0, _cbNeed = 0;
 	union {
 		SC_Cntr _sc;
-		char _buf[];
+		UCHAR _buf[];
 	};
 
 	enum { max_sc_size = 0x4000 };

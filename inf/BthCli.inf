@@ -1,0 +1,43 @@
+[Version]
+Signature="$WINDOWS NT$"
+Class=Bluetooth
+ClassGuid={e0cbf06c-cd8b-4647-bb8a-263b43f0f974}
+Provider=%ProviderString%
+DriverVer=05/17/2023,2.0.0.0
+CatalogFile=BthCli.cat
+PnpLockDown=1
+
+[SourceDisksNames]
+1 = Rbmm tools
+
+[SourceDisksFiles.amd64]
+BthCli.sys = 1,x64
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+[Manufacturer]
+%ManufacturerString%=Model, NTamd64
+
+[Model.NTamd64]
+%BthCli.DeviceDesc% = DDInstall, BTHENUM\{adf8eb1b-0718-4366-a418-bb88f175d361}_LOCALMFG&0000
+
+[DDInstall]
+CopyFiles=@BthCli.sys
+
+[DDInstall.Services]
+AddService = BthCli, 2, Service_Install
+
+[Service_Install]
+DisplayName    = %BthCli.DeviceDesc%
+ServiceType    = 1               ; SERVICE_KERNEL_DRIVER
+StartType      = 3               ; SERVICE_DEMAND_START 
+ErrorControl   = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %12%\BthCli.sys
+
+
+[Strings]
+ProviderString = "Rbmm, Ltd"
+ManufacturerString = "Rbmm"
+BthCli.DeviceDesc = "Rbmm Bluetooth L2CAP Client"
+BthCli.SVCDESC = "BthCli"

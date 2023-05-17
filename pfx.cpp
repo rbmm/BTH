@@ -5,6 +5,7 @@ _NT_BEGIN
 #include "../asio/packet.h"
 #include "pfx.h"
 #include "util.h"
+#include "resource.h"
 
 #ifndef MD5_HASH_SIZE
 #define MD5_HASH_SIZE 16
@@ -101,13 +102,41 @@ void PFX_CONTEXT::Cleanup()
 		packet->Release();
 		_packet = 0;
 	}
+
+	if (_hKey)
+	{
+		BCryptDestroyKey(_hKey);
+	}
 }
 
-BOOL PFX_CONTEXT::Init(HWND hwndEdit)
+BOOL PFX_CONTEXT::Init(HWND hwndDlg)
 {
 	Cleanup();
 
-	ULONG len = GetWindowTextLengthW(hwndEdit);
+	HWND hwndEdit;
+	CHAR szpin[64], szpin2[64];
+	ULONG len = GetDlgItemTextA(hwndDlg, IDC_EDIT3, szpin, _countof(szpin));
+
+	if (_countof(szpin) <= GetWindowTextLengthW(GetDlgItem(hwndDlg, IDC_EDIT3)))
+	{
+		ShowErrorBox(hwndDlg, HRESULT_FROM_NT(STATUS_NAME_TOO_LONG), L"Bad PIN", MB_ICONHAND);
+		return FALSE;
+	}
+
+	if (GetDlgItemTextA(hwndDlg, IDC_EDIT3, szpin, _countof(szpin)) !=
+		GetDlgItemTextA(hwndDlg, IDC_EDIT4, szpin2, _countof(szpin2)) ||
+		strcmp(szpin, szpin2))
+	{
+		ShowErrorBox(hwndDlg, HRESULT_FROM_NT(STATUS_OBJECT_NAME_INVALID), L"PIN mismatch", MB_ICONHAND);
+		return FALSE;
+	}
+
+	if (0 > DoHash((PUCHAR)szpin, len, _sha256_pin, sizeof(_sha256_pin), BCRYPT_SHA256_ALGORITHM))
+	{
+		return FALSE;
+	}
+
+	len = GetWindowTextLengthW(hwndEdit = GetDlgItem(hwndDlg, IDC_EDIT1));
 
 	if (len - 1 > 62) 
 	{
@@ -122,54 +151,65 @@ BOOL PFX_CONTEXT::Init(HWND hwndEdit)
 	PWSTR pszName = 0;
 
 	NTSTATUS status;
-	NCRYPT_KEY_HANDLE hKey;
-	ULONG d;
+	ULONG d = 0;
 
-	if (0 <= (status = OpenOrCreateKey(&hKey, L"DFA1ECDB242447beBCA9FE60E043A304", NCRYPT_SILENT_FLAG, &d)))
+	BCRYPT_ALG_HANDLE hAlgorithm;
+	if (0 <= (status = BCryptOpenAlgorithmProvider(&hAlgorithm, BCRYPT_RSA_ALGORITHM, MS_PRIMITIVE_PROVIDER, 0)))
 	{
-		X_KEY_AND_NAME* p = 0;
-		PBYTE pbPubKey = 0;
-		ULONG cb = 0;
+		BCRYPT_KEY_HANDLE hKey;
+		status = BCryptGenerateKeyPair(hAlgorithm, &hKey, 2048, 0);
+		BCryptCloseAlgorithmProvider(hAlgorithm, 0);
 
-		while (NOERROR == (status = NCryptExportKey(hKey, 0, BCRYPT_RSAPUBLIC_BLOB, 0, pbPubKey, cb, &cb, 0)))
+		if (0 <= status)
 		{
-			if (pbPubKey)
+			if (0 <= (status = BCryptFinalizeKeyPair(hKey, 0)))
 			{
-				p->keyLen = (USHORT)cb;
-				p->nameLen = (USHORT)len - 1;
-				if (GetWindowTextW(hwndEdit, pszName, len ))
+				X_KEY_AND_NAME* p = 0;
+				PBYTE pb = 0;
+				ULONG cb = 0;
+
+				while (0 <= (status = BCryptExportKey(hKey, 0, BCRYPT_RSAPUBLIC_BLOB, pb, cb, &cb, 0)))
 				{
-					RtlZeroMemory(p->md5, sizeof(p->md5));
-					if (0 <= h_MD5(p, d, p->md5))
+					if (pb)
 					{
-						packet->setDataSize(d);
-						fOk = TRUE;
+						p->keyLen = (USHORT)cb;
+						p->nameLen = (USHORT)len - 1;
+						if (GetWindowTextW(hwndEdit, pszName, len ))
+						{
+							RtlZeroMemory(p->md5, sizeof(p->md5));
+							if (0 <= h_MD5(p, d, p->md5))
+							{
+								packet->setDataSize(d);
+								_hKey = hKey, hKey = 0;
+								fOk = TRUE;
+							}
+						}
+
+						break;
+					}
+
+					if (cb > 0x4000)
+					{
+						break;
+					}
+
+					d = FIELD_OFFSET(X_KEY_AND_NAME, buf) + ((cb + __alignof(WCHAR) - 1) & ~(__alignof(WCHAR) - 1)) + ++len * sizeof(WCHAR);
+
+					if (packet = new(d) CDataPacket)
+					{
+						p = (X_KEY_AND_NAME*)packet->getData();
+						pb = p->buf;
+						pszName = (PWSTR)(p->buf + ((cb + __alignof(WCHAR) - 1) & ~(__alignof(WCHAR) - 1)));
+					}
+					else
+					{
+						break;
 					}
 				}
-
-				break;
 			}
 
-			if (cb > 0x4000)
-			{
-				break;
-			}
-
-			d = FIELD_OFFSET(X_KEY_AND_NAME, buf) + ((cb + 1) & ~1) + ++len * sizeof(WCHAR);
-
-			if (packet = new(d) CDataPacket)
-			{
-				p = (X_KEY_AND_NAME*)packet->getData();
-				pbPubKey = p->buf;
-				pszName = (PWSTR)(p->buf + ((cb + 1) & ~1));
-			}
-			else
-			{
-				break;
-			}
+			if (hKey) BCryptDestroyKey(hKey);
 		}
-
-		NCryptFreeObject(hKey);
 	}
 
 	if (fOk)

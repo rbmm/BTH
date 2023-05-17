@@ -55,11 +55,6 @@ inline NTSTATUS h_MD5(LPCVOID pbData, ULONG cbData, PUCHAR pbOutput)
 
 int ShowErrorBox(HWND hwnd, HRESULT dwError, PCWSTR pzCaption, UINT uType = MB_OK);
 
-HRESULT OpenOrCreateKey(_Out_ NCRYPT_KEY_HANDLE *phKey, 
-						_In_ PCWSTR pszKeyName, 
-						_In_ ULONG dwFlags,
-						_Out_opt_ PULONG lpdwDisposition = 0);
-
 NTSTATUS OpenBKey(_Out_ BCRYPT_KEY_HANDLE *phKey, _In_ PCWSTR pszKeyName);
 
 void FixBase64(PWSTR pszString, ULONG cch);

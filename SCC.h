@@ -15,7 +15,10 @@ enum SCAlgId : UCHAR {
 
 struct SC_Cntr
 {
-	enum : USHORT { scTag = 'CS' } Tag;
+	union {
+		USHORT cbPrivKey;
+		enum : USHORT { scTag = 'CS' } Tag;
+	};
 	enum : UCHAR { bTag = 'b' } subTag;
 	SCAlgId algid;
 	USHORT PubKeyLength, CertLength;
@@ -47,5 +50,11 @@ struct SC_Cntr
 		return FIELD_OFFSET(SC_Cntr, buf) + PubKeyLength + CertLength;
 	}
 
-	BOOL IsValid(ULONG cb);
+	PBYTE GetPrivKey(PULONG pcb)
+	{
+		*pcb = cbPrivKey;
+		return buf + ((PubKeyLength + CertLength + __alignof(BCRYPT_RSAKEY_BLOB) - 1) & ~(__alignof(BCRYPT_RSAKEY_BLOB) - 1));
+	}
+
+	ULONG IsValid(ULONG cb);
 };

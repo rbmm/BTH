@@ -17,9 +17,9 @@ _NT_BEGIN
 #include "BthRequest.h"
 #include "ScSocket.h"
 
-BOOL SC_Cntr::IsValid(ULONG cb)
+ULONG SC_Cntr::IsValid(ULONG cb)
 {
-	if (cb > sizeof(SC_Cntr) && Tag == scTag && subTag == bTag)
+	if (cb > sizeof(SC_Cntr) && cb < MAXSHORT && Tag == scTag && subTag == bTag)
 	{
 		switch (algid)
 		{
@@ -29,13 +29,15 @@ BOOL SC_Cntr::IsValid(ULONG cb)
 			{
 				if (ULONG cLen = CertLength)
 				{
-					if (cb == FIELD_OFFSET(SC_Cntr, buf) + kLen + cLen)
+					kLen += FIELD_OFFSET(SC_Cntr, buf) + cLen;
+					cLen = (kLen + __alignof(BCRYPT_RSAKEY_BLOB) - 1) & ~(__alignof(BCRYPT_RSAKEY_BLOB) - 1);
+					if (cb > cLen)
 					{
 						UCHAR md5[MD5_HASH_SIZE];
 						memcpy(md5, MD5, MD5_HASH_SIZE);
 						RtlZeroMemory(MD5, sizeof(MD5));
 
-						return 0 <= h_MD5(this, cb, MD5) && !memcmp(md5, MD5, MD5_HASH_SIZE);
+						return 0 > h_MD5(this, kLen, MD5) || memcmp(md5, MD5, MD5_HASH_SIZE) ? 0 : cb - cLen;
 					}
 				}
 			}
@@ -43,7 +45,7 @@ BOOL SC_Cntr::IsValid(ULONG cb)
 		}
 	}
 
-	return FALSE;
+	return 0;
 }
 
 extern volatile const UCHAR guz;
@@ -51,7 +53,6 @@ extern volatile const UCHAR guz;
 class InsertScDlg : public BthDlg
 {
 	ELog log;
-	BCRYPT_KEY_HANDLE _hKey = 0;
 	ScSocket* _pSocket = 0;
 	PBTH_DEVICE_INFO_LIST _pList = 0;
 	LONG _dwInquireCount = 0;
@@ -509,8 +510,10 @@ __0:
 								{
 									if (0 <= NtReadFile(hFile, 0, 0, 0, &iosb, pkn, cb + sizeof(SC_Cntr), 0, 0))
 									{
-										if (pkn->IsValid((ULONG)iosb.Information))
+										if (ULONG s = pkn->IsValid((ULONG)iosb.Information))
 										{
+											pkn->cbPrivKey = (USHORT)s;
+											//pkn->Test((PBYTE)"0",1);
 											name[cchName] = 0;
 											if (0 <= (i = ComboBox_AddString(hwndCB, name)))
 											{
@@ -545,15 +548,8 @@ __0:
 	{
 		log.Set(GetDlgItem(hwndDlg, IDC_EDIT1));
 
-		HRESULT hr = OpenBKey(&_hKey, L"DFA1ECDB242447beBCA9FE60E043A304");
-
+		HRESULT hr = EnumContainers(GetDlgItem(hwndDlg, IDC_COMBO1));
 		if (0 > hr)
-		{
-			*ppcsz = L"Can not open private key!";
-			return hr;
-		}
-
-		if (0 > (hr = EnumContainers(GetDlgItem(hwndDlg, IDC_COMBO1))))
 		{
 			*ppcsz = L"Not found any certificates!";
 			return hr;
@@ -590,24 +586,12 @@ __0:
 			} while (n);
 		}
 
-		if (BCRYPT_KEY_HANDLE hKey = _hKey)
-		{
-			BCryptDestroyKey(hKey);
-		}
-
 		BthDlg::OnDestroy();
 	}
 
 	void Insert(HWND hwndDlg)
 	{
 		if (0 <= _dwIndex)
-		{
-			return ;
-		}
-
-		BCRYPT_KEY_HANDLE hKey = _hKey;
-
-		if (!hKey)
 		{
 			return ;
 		}
@@ -651,9 +635,9 @@ __0:
 
 		HRESULT hr = E_OUTOFMEMORY;
 
-		if (ScSocket* p = new ScSocket(_hKey, pkn, hwndDlg, port->_id, GetDlgItem(hwndDlg, IDC_EDIT1)))
+		if (ScSocket* p = new ScSocket(pkn, hwndDlg, port->_id, GetDlgItem(hwndDlg, IDC_EDIT1)))
 		{
-			ComboBox_SetItemData(hwndCB, i, 0), _hKey = 0, _dwIndex = i;
+			ComboBox_SetItemData(hwndCB, i, 0), _dwIndex = i;
 
 			if (0 <= (hr = p->Create()))
 			{
@@ -830,11 +814,10 @@ __0:
 			return 0;
 
 		case WM_RES:
-			if (0 > _dwIndex || _hKey)
+			if (0 > _dwIndex)
 			{
 				__debugbreak();
 			}
-			_hKey = (BCRYPT_KEY_HANDLE)wParam;
 			if (HWND hwndCB = GetDlgItem(hwndDlg, IDC_COMBO1))
 			{
 				ComboBox_SetItemData(hwndCB, _dwIndex, lParam), _dwIndex = -1;

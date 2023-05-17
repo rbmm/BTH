@@ -7,7 +7,8 @@
 
 class ScSocket : public L2capSocket
 {
-	BCRYPT_KEY_HANDLE _hKey;
+	BCRYPT_KEY_HANDLE _hKey = 0;
+	BCRYPT_KEY_HANDLE _hExchKey = 0;
 	SC_Cntr* _pkn;
 	HWND _hwnd;
 	ELog log;
@@ -18,6 +19,8 @@ class ScSocket : public L2capSocket
 	virtual BOOL OnConnect(NTSTATUS status, _BRB_L2CA_OPEN_CHANNEL* OpenChannel);
 	virtual void OnDisconnect(NTSTATUS status);
 	virtual void OnRecv(NTSTATUS status, _BRB_L2CA_ACL_TRANSFER* acl);
+
+	NTSTATUS ProcessPIN(PUCHAR pb, ULONG cb);
 
 	typedef NTSTATUS (*BCryptXYZ)(
 		_In_                                        BCRYPT_KEY_HANDLE hKey,
@@ -31,7 +34,7 @@ class ScSocket : public L2capSocket
 	struct REMOTE_APDU 
 	{
 		USHORT Length;
-		enum OP_TYPE : UCHAR { opSign, opDecrypt, opEncrypt } opType;
+		enum OP_TYPE : UCHAR { opSign, opDecrypt, opEncrypt, opPin, opReset } opType;
 		enum ALG_ID : UCHAR { a_md2, a_md4, a_md5, a_sha1, a_sha256, a_sha384, a_sha512 } algId; // in case opType == opSign
 		ULONG Hint;
 		UCHAR buf[/*Length*/];
@@ -43,7 +46,9 @@ public:
 
 	enum { res_resp = '~~~~' };
 
-	ScSocket(BCRYPT_KEY_HANDLE hKey, SC_Cntr* pkn, HWND hwnd, ULONG id, HWND hwndLog);
+	ScSocket(SC_Cntr* pkn, HWND hwnd, ULONG id, HWND hwndLog);
+
+	HRESULT Create();
 
 	ULONG get_id()
 	{
