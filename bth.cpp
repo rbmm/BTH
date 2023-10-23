@@ -960,6 +960,12 @@ INT_PTR CALLBACK StartDialogProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM 
 	return 0;
 }
 
+//#pragma warning(disable: 4483) // Allow use of __identifier
+//__identifier("*");
+void UdpSrv();
+void UdpCli();
+
+
 void CALLBACK ep(void*)
 {
 	initterm();
@@ -969,7 +975,16 @@ void CALLBACK ep(void*)
 		WSADATA wd;
 		if (!WSAStartup(WINSOCK_VERSION, &wd))
 		{
+			//UdpCli();
 			DialogBoxParamW((HINSTANCE)&__ImageBase, MAKEINTRESOURCEW(IDD_DIALOG5), 0, StartDialogProc, 0);
+			//if (GetTickCount())
+			//{
+			//	UdpCli();
+			//	UdpSrv();
+			//}
+			//else
+			//{
+			//}
 			WSACleanup();
 		}
 		CoUninitialize();

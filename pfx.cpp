@@ -11,44 +11,36 @@ _NT_BEGIN
 #define MD5_HASH_SIZE 16
 #endif
 
-struct X_KEY_AND_NAME 
+HRESULT BuildPkcs10(_In_ PCWSTR pwszName, _Out_ CDataPacket** request, _Out_ BCRYPT_KEY_HANDLE* phKey);
+
+void PFX_CONTEXT::Cleanup()
 {
-	UCHAR md5[MD5_HASH_SIZE];
-	USHORT keyLen, nameLen;
-	union {
-		BCRYPT_RSAKEY_BLOB rkb;
-		UCHAR buf[]; 
-	};
-
-	ULONG Size();
-
-	PCWSTR GetName()
+	if (_FileName)
 	{
-		return(PWSTR)(buf + ((keyLen + 1) & ~1));
+		delete [] _FileName;
+		_FileName = 0;
 	}
-};
+
+	if (_packet)
+	{
+		_packet->Release();
+		_packet = 0;
+	}
+
+	if (_hKey)
+	{
+		BCryptDestroyKey(_hKey);
+		_hKey = 0;
+	}
+}
 
 PFX_CONTEXT::~PFX_CONTEXT()
 {
-	union {
-		HANDLE hDirectory;
-		PWSTR FileName;
-		CDataPacket* packet;
-	};
+	Cleanup();
 
-	if (FileName = _FileName)
+	if (_hDirectory)
 	{
-		delete [] FileName;
-	}
-
-	if (packet = _packet)
-	{
-		packet->Release();
-	}
-
-	if (hDirectory = _hDirectory)
-	{
-		NtClose(hDirectory);
+		NtClose(_hDirectory);
 	}
 }
 
@@ -89,26 +81,6 @@ HRESULT PFX_CONTEXT::OpenFolder()
 	return HRESULT_FROM_WIN32(GetLastError());
 }
 
-void PFX_CONTEXT::Cleanup()
-{
-	if (PWSTR FileName = _FileName)
-	{
-		delete [] FileName;
-		_FileName = 0;
-	}
-
-	if (CDataPacket* packet = _packet)
-	{
-		packet->Release();
-		_packet = 0;
-	}
-
-	if (_hKey)
-	{
-		BCryptDestroyKey(_hKey);
-	}
-}
-
 BOOL PFX_CONTEXT::Init(HWND hwndDlg)
 {
 	Cleanup();
@@ -138,86 +110,28 @@ BOOL PFX_CONTEXT::Init(HWND hwndDlg)
 
 	len = GetWindowTextLengthW(hwndEdit = GetDlgItem(hwndDlg, IDC_EDIT1));
 
-	if (len - 1 > 62) 
+	WCHAR wszName[64];
+
+	if (len - 1 > _countof(wszName) - 2 || !(len = GetWindowTextW(hwndEdit, wszName, _countof(wszName) )))
 	{
 		ShowErrorBox(hwndEdit, len ?
 			HRESULT_FROM_NT(STATUS_NAME_TOO_LONG) : HRESULT_FROM_NT(STATUS_OBJECT_NAME_INVALID), 
 			L"Invalid Cerificate name", MB_ICONHAND);
+		
 		return FALSE;
 	}
 
 	BOOL fOk = FALSE;
-	CDataPacket* packet = 0;
-	PWSTR pszName = 0;
 
 	NTSTATUS status;
-	ULONG d = 0;
 
-	BCRYPT_ALG_HANDLE hAlgorithm;
-	if (0 <= (status = BCryptOpenAlgorithmProvider(&hAlgorithm, BCRYPT_RSA_ALGORITHM, MS_PRIMITIVE_PROVIDER, 0)))
-	{
-		BCRYPT_KEY_HANDLE hKey;
-		status = BCryptGenerateKeyPair(hAlgorithm, &hKey, 2048, 0);
-		BCryptCloseAlgorithmProvider(hAlgorithm, 0);
-
-		if (0 <= status)
-		{
-			if (0 <= (status = BCryptFinalizeKeyPair(hKey, 0)))
-			{
-				X_KEY_AND_NAME* p = 0;
-				PBYTE pb = 0;
-				ULONG cb = 0;
-
-				while (0 <= (status = BCryptExportKey(hKey, 0, BCRYPT_RSAPUBLIC_BLOB, pb, cb, &cb, 0)))
-				{
-					if (pb)
-					{
-						p->keyLen = (USHORT)cb;
-						p->nameLen = (USHORT)len - 1;
-						if (GetWindowTextW(hwndEdit, pszName, len ))
-						{
-							RtlZeroMemory(p->md5, sizeof(p->md5));
-							if (0 <= h_MD5(p, d, p->md5))
-							{
-								packet->setDataSize(d);
-								_hKey = hKey, hKey = 0;
-								fOk = TRUE;
-							}
-						}
-
-						break;
-					}
-
-					if (cb > 0x4000)
-					{
-						break;
-					}
-
-					d = FIELD_OFFSET(X_KEY_AND_NAME, buf) + ((cb + __alignof(WCHAR) - 1) & ~(__alignof(WCHAR) - 1)) + ++len * sizeof(WCHAR);
-
-					if (packet = new(d) CDataPacket)
-					{
-						p = (X_KEY_AND_NAME*)packet->getData();
-						pb = p->buf;
-						pszName = (PWSTR)(p->buf + ((cb + __alignof(WCHAR) - 1) & ~(__alignof(WCHAR) - 1)));
-					}
-					else
-					{
-						break;
-					}
-				}
-			}
-
-			if (hKey) BCryptDestroyKey(hKey);
-		}
-	}
-
-	if (fOk)
+	if (0 <= (status = BuildPkcs10(wszName, &_packet, &_hKey)))
 	{
 		fOk = FALSE;
 		PSTR utf8 = 0;
 		ULONG cb = 0;
-		while (cb = WideCharToMultiByte(CP_UTF8, 0, pszName, MAXULONG, utf8, cb, 0, 0))
+		++len;
+		while (cb = WideCharToMultiByte(CP_UTF8, 0, wszName, len, utf8, cb, 0, 0))
 		{
 			if (utf8)
 			{
@@ -247,8 +161,7 @@ BOOL PFX_CONTEXT::Init(HWND hwndDlg)
 							[[fallthrough]];
 						case STATUS_OBJECT_NAME_NOT_FOUND:
 							fOk = TRUE;
-							_packet = packet, packet = 0;
-							_FileName= filename, filename = 0;
+							_FileName = filename, filename = 0;
 							break;
 						default:
 							ShowErrorBox(hwndEdit, HRESULT_FROM_NT(status), L"fail create cert file", MB_ICONHAND);
@@ -275,20 +188,21 @@ BOOL PFX_CONTEXT::Init(HWND hwndDlg)
 		}
 	}
 
-	if (packet)
-	{
-		packet->Release();
-	}
-
 	return fOk;
 }
 
-NTSTATUS PFX_CONTEXT::InitUserUuid(_In_ HWND hwndDlg, _In_ UINT nIDDlgItem)
+NTSTATUS InitUserUuid(_Out_ PGUID guid, _In_ HWND hwndDlg, _In_ UINT nIDDlgItem)
 {
-	BOOL b;
-	UINT u = GetDlgItemInt(hwndDlg, nIDDlgItem, &b, FALSE);
+	WCHAR sz[33];
+	if (_countof(sz) - 1 != GetDlgItemTextW(hwndDlg, nIDDlgItem, sz, _countof(sz)))
+	{
+		return STATUS_OBJECT_NAME_INVALID;
+	}
 
-	return b ? h_MD5(&u, sizeof(u), (PUCHAR)static_cast<PGUID>(this)) : STATUS_OBJECT_NAME_INVALID;
+	ULONG cb = guid ? sizeof(GUID) : 0;
+
+	return CryptStringToBinaryW(sz, _countof(sz) - 1, CRYPT_STRING_HEXRAW, (PUCHAR)guid, &cb, 0, 0) &&
+		cb == sizeof(GUID) ? STATUS_SUCCESS : STATUS_OBJECT_NAME_INVALID;
 }
 
 _NT_END

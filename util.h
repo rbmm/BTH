@@ -59,3 +59,6 @@ NTSTATUS OpenBKey(_Out_ BCRYPT_KEY_HANDLE *phKey, _In_ PCWSTR pszKeyName);
 
 void FixBase64(PWSTR pszString, ULONG cch);
 void UnFixBase64(PWSTR pszString, ULONG cch);
+
+//////////////////////////////////////////////////////////////////////////
+

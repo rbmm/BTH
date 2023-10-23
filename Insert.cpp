@@ -1,6 +1,7 @@
 #include "stdafx.h"
 #include "resource.h"
-
+#include <compressapi.h>
+#include <Cryptuiapi.h >
 _NT_BEGIN
 
 #include "../winZ/window.h"
@@ -16,6 +17,7 @@ _NT_BEGIN
 #include "BthDlg.h"
 #include "BthRequest.h"
 #include "ScSocket.h"
+#include "asn1.h"
 
 ULONG SC_Cntr::IsValid(ULONG cb)
 {
@@ -46,6 +48,74 @@ ULONG SC_Cntr::IsValid(ULONG cb)
 	}
 
 	return 0;
+}
+
+PCCERT_CONTEXT CreateContext(SC_Cntr* pkn)
+{
+	union {
+		PUSHORT pu;
+		const BYTE* pb;
+	};
+
+	pb = pkn->GetCert();
+	ULONG cb = pkn->CertLength;
+
+	const BYTE* pbTag = pb;
+	ULONG cbTag = cb;
+
+	if (!TLV_IsValid(pb, cb) || 0x70DF != TLV_TagLen(&pbTag, &cbTag, &pb, &cb))
+	{
+		return 0;
+	}
+
+	PCCERT_CONTEXT pCertContext = 0;
+
+	if (2*sizeof(USHORT)+sizeof(ULONG) < cb && 'KC' == pu[0] && 0x9C78 == pu[2])
+	{
+		pu[2] = 'KC';
+
+		union {
+			SIZE_T UncompressedDataSize;
+			ULONG cbCertEncoded;
+		};
+
+		cbCertEncoded = pu[1];
+
+		if (PBYTE pbCertEncoded = new BYTE[cbCertEncoded])
+		{
+			COMPRESSOR_HANDLE DecompressorHandle;
+			if (CreateDecompressor(COMPRESS_ALGORITHM_MSZIP|COMPRESS_RAW, 0, &DecompressorHandle))
+			{
+				if (Decompress(DecompressorHandle, pu + 2, cb - 2*sizeof(USHORT)-sizeof(ULONG), 
+					pbCertEncoded, cbCertEncoded, &UncompressedDataSize))
+				{
+					pCertContext = CertCreateCertificateContext(X509_ASN_ENCODING, pbCertEncoded, cbCertEncoded);
+
+					delete [] pbCertEncoded;
+				}
+
+				CloseDecompressor(DecompressorHandle);
+			}
+		}
+
+		pu[2] = 0x9C78;
+	}
+
+	return pCertContext;
+}
+
+void ShowAndFreeCert(HWND hwnd, PCCERT_CONTEXT pCertContext)
+{
+	CRYPTUI_VIEWCERTIFICATE_STRUCTW cvi = { 
+		sizeof(cvi), hwnd, 
+		CRYPTUI_DISABLE_ADDTOSTORE|CRYPTUI_DISABLE_EDITPROPERTIES,
+		L"View Certificate", pCertContext
+	};
+
+	BOOL b;
+	CryptUIDlgViewCertificateW(&cvi, &b);
+	CertFreeCertificateContext(pCertContext);
+
 }
 
 extern volatile const UCHAR guz;
@@ -668,6 +738,22 @@ __0:
 		}
 	}
 
+	static void ShowCert(HWND hwndDlg)
+	{
+		HWND hwndCB = GetDlgItem(hwndDlg, IDC_COMBO1);
+		int i = ComboBox_GetCurSel(hwndCB);
+		if (0 <= i)
+		{
+			if (SC_Cntr* pkn = (SC_Cntr*)ComboBox_GetItemData(hwndCB, i))
+			{
+				if (PCCERT_CONTEXT pCertContext = CreateContext(pkn))
+				{
+					ShowAndFreeCert(hwndDlg, pCertContext);
+				}
+			}
+		}
+	}
+
 	void DeleteSC(HWND hwndDlg)
 	{
 		HWND hwndCB = GetDlgItem(hwndDlg, IDC_COMBO1);
@@ -741,7 +827,6 @@ __0:
 
 			utf8 = (PSTR)alloca(cb);
 		}
-
 	}
 
 	virtual INT_PTR DialogProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
@@ -809,6 +894,10 @@ __0:
 
 			case IDC_BUTTON3:
 				DeleteSC(hwndDlg);
+				break;
+			
+			case IDC_BUTTON4:
+				ShowCert(hwndDlg);
 				break;
 			}
 			return 0;

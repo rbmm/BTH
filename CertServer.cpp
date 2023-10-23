@@ -5,6 +5,8 @@ _NT_BEGIN
 #include "util.h"
 #include "CertServer.h"
 
+PCCERT_CONTEXT CreateContext(SC_Cntr* pkn);
+
 BOOL PfxSocket::OnRecv(PSTR /*Buffer*/, ULONG cbTransferred)
 {
 	DbgPrint("%s<%p>(%x)\n", __FUNCTION__, this, cbTransferred);
@@ -70,7 +72,7 @@ __0:
 				}
 			}
 
-			PostMessageW(_hwnd, WM_DONE, 0, status);
+			PostMessageW(_hwnd, WM_DONE, 0 > status ? 0 : (WPARAM)CreateContext(&_sc), status);
 		}
 
 		return FALSE;

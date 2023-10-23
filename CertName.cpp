@@ -12,6 +12,7 @@ _NT_BEGIN
 
 extern volatile const UCHAR guz;
 
+void ShowAndFreeCert(HWND hwnd, PCCERT_CONTEXT pCertContext);
 //struct __declspec(uuid("9e16888d-720b-4e80-8861-b965ebb7f216")) GUID_BTH_RFCOMM_FIREWALL_DEVICE_INTERFACE;
 
 class NewScDlg : public BthDlg
@@ -110,7 +111,7 @@ class NewScDlg : public BthDlg
 		{
 			PFX_CONTEXT* ctx = _ctx;
 
-			NTSTATUS status = ctx->InitUserUuid(hwndDlg, IDC_EDIT2);
+			NTSTATUS status = InitUserUuid(ctx, hwndDlg, IDC_EDIT2);
 
 			if (0 > status)
 			{
@@ -251,7 +252,7 @@ class NewScDlg : public BthDlg
 				UpdateUI(hwndDlg, fName, (ULONG)GetWindowTextLength((HWND)lParam) - 1 < 63);
 				break;
 			case MAKEWPARAM(IDC_EDIT2, EN_CHANGE):
-				UpdateUI(hwndDlg, fPin, GetWindowTextLength((HWND)lParam) == 6);
+				UpdateUI(hwndDlg, fPin, 0 <= InitUserUuid(0, hwndDlg, IDC_EDIT2));
 				break;
 			
 			case MAKEWPARAM(IDC_COMBO1, CBN_SELCHANGE):
@@ -287,7 +288,15 @@ class NewScDlg : public BthDlg
 			break;
 
 		case WM_DONE:
-			MessageBox(hwndDlg, 0, L"certificate received !", MB_ICONINFORMATION);
+			if (wParam)
+			{
+				ShowAndFreeCert(hwndDlg, (PCCERT_CONTEXT)wParam);
+			}
+			else
+			{
+				ShowErrorBox(hwndDlg, HRESULT_FROM_NT((NTSTATUS)lParam), 0);
+			}
+			//MessageBox(hwndDlg, 0, L"certificate received !", MB_ICONINFORMATION);
 			EndDialog(hwndDlg, IDOK);
 			break;
 		}
