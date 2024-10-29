@@ -366,6 +366,34 @@ HRESULT BuildPkcs10(_In_ PCWSTR pwszName, _Out_ CDataPacket** request, _Out_ BCR
 
 	if (S_OK == (hr = CreateBKey(&hKey)))
 	{
+		PBYTE pb = 0;
+		ULONG cb = 0;
+		CDataPacket* packet = 0;
+
+		while (0 <= (hr = BCryptExportKey(hKey, 0, BCRYPT_RSAPUBLIC_BLOB, pb, cb, &cb, 0)))
+		{
+			if (pb)
+			{
+				packet->setDataSize(cb);
+				*request = packet;
+				*phKey = hKey;
+				return S_OK;
+			}
+
+			if (!(packet = new(cb) CDataPacket))
+			{
+				hr = STATUS_NO_MEMORY;
+				break;
+			}
+
+			pb = (PBYTE)packet->getData();
+		}
+
+		if (packet)
+		{
+			packet->Release();
+		}
+#if 0
 		DATA_BLOB rgValues[4] = {};
 		CRYPT_ATTRIBUTE rgAttribute[4];
 		CERT_REQUEST_INFO cri = { CERT_REQUEST_V1, {}, {}, _countof(rgAttribute), rgAttribute };
@@ -395,7 +423,7 @@ HRESULT BuildPkcs10(_In_ PCWSTR pwszName, _Out_ CDataPacket** request, _Out_ BCR
 			*phKey = hKey;
 			return S_OK;
 		}
-
+#endif
 		BCryptDestroyKey(hKey);
 	}
 

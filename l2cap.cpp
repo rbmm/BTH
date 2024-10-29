@@ -18,7 +18,7 @@ struct _BRB_L2CA_OPEN_CHANNEL_CONTEXT : _BRB_L2CA_OPEN_CHANNEL
 	NT_IRP* CbIrp;
 };
 
-void ReleaseCbIrp(NT_IRP* CbIrp)
+void ReleaseCbIrp(NT_IRP* CbIrp, PTP_IO io, IO_OBJECT* pObj)
 {
 	LONG ref_count = InterlockedDecrement((PLONG)CbIrp->GetBuf());
 
@@ -27,6 +27,15 @@ void ReleaseCbIrp(NT_IRP* CbIrp)
 	if (!ref_count)
 	{
 		DbgPrint("CbIrp: --%p\n", CbIrp);
+
+		int n = 9;
+		do 
+		{
+			TpCancelAsyncIoOperation(io);
+			pObj->Release();
+
+		} while (--n);
+
 		CbIrp->Delete();
 	}
 }
@@ -41,7 +50,7 @@ void L2capSocket::IOCompletionRoutine(CDataPacket* packet, DWORD Code, NTSTATUS 
 		OnConnect(status, (_BRB_L2CA_OPEN_CHANNEL*)Pointer);
 		if (0 > status)
 		{
-			ReleaseCbIrp(reinterpret_cast<_BRB_L2CA_OPEN_CHANNEL_CONTEXT*>(Pointer)->CbIrp);
+			ReleaseCbIrp(reinterpret_cast<_BRB_L2CA_OPEN_CHANNEL_CONTEXT*>(Pointer)->CbIrp, GetAsyncIo(), this);
 		}
 		break;
 	case c_recv:
@@ -56,17 +65,19 @@ void L2capSocket::IOCompletionRoutine(CDataPacket* packet, DWORD Code, NTSTATUS 
 		DbgPrint("Disconnect=%x\n", status);
 		break;
 	case c_callback:
+		AddRef();
+		TpStartAsyncIoOperation(GetAsyncIo()); 
 		switch (Information)
 		{
 		case IndicationRemoteDisconnect:
 			OnDisconnect(status);
-			ReleaseCbIrp(reinterpret_cast<NT_IRP*>(Pointer));
+			ReleaseCbIrp(reinterpret_cast<NT_IRP*>(Pointer), GetAsyncIo(), this);
 			break;
 		case IndicationRecvPacket:
 			NeedRecv(status);
 			break;
 		case IndicationReleaseReference:
-			ReleaseCbIrp(reinterpret_cast<NT_IRP*>(Pointer));
+			ReleaseCbIrp(reinterpret_cast<NT_IRP*>(Pointer), GetAsyncIo(), this);
 			break;
 		case IndicationAddReference:
 			status = InterlockedIncrement((PLONG)reinterpret_cast<NT_IRP*>(Pointer)->GetBuf());
@@ -106,7 +117,8 @@ NTSTATUS L2capSocket::Disconnect()
 
 		if (NT_IRP* Irp = new(0) NT_IRP(this, c_disc, 0))
 		{
-			status = Irp->CheckNtStatus(NtDeviceIoControlFile(hFile, 0, 0, Irp, Irp, IOCTL_L2CA_CLOSE_CHANNEL, 0, 0, 0, 0));
+			Irp->CheckNtStatus(this, NtDeviceIoControlFile(hFile, 0, 0, Irp, Irp, IOCTL_L2CA_CLOSE_CHANNEL, 0, 0, 0, 0));
+			status = 0;
 		}
 		UnlockHandle();
 	}
@@ -122,7 +134,7 @@ HRESULT L2capSocket::Create()
 		return HRESULT_FROM_WIN32(err);
 	}
 
-	NTSTATUS status = NT_IRP::RtlBindIoCompletion(hFile);
+	NTSTATUS status = NT_IRP::BindIoCompletion(this, hFile);
 
 	if (0 > status)
 	{
@@ -149,6 +161,14 @@ NTSTATUS L2capSocket::Connect(BTH_ADDR BtAddress, USHORT Psm)
 
 			if (NT_IRP* Irp = new(sizeof(_BRB_L2CA_OPEN_CHANNEL_CONTEXT)) NT_IRP(this, c_connect, 0))
 			{
+				PTP_IO io = GetAsyncIo();
+				int n = 8;
+				do 
+				{
+					AddRef();
+					TpStartAsyncIoOperation(io);
+				} while (--n);
+
 				PLONG pRef = (PLONG)CbIrp->NotDelete();
 				*pRef = 1;
 
@@ -163,8 +183,10 @@ NTSTATUS L2capSocket::Connect(BTH_ADDR BtAddress, USHORT Psm)
 				OpenChannel->CallbackContext = CbIrp;
 				OpenChannel->CbIrp = CbIrp;
 
-				status = Irp->CheckNtStatus(NtDeviceIoControlFile(hFile, 0, 0, Irp, Irp, IOCTL_L2CA_OPEN_CHANNEL, 
+				Irp->CheckNtStatus(this, NtDeviceIoControlFile(hFile, 0, 0, Irp, Irp, IOCTL_L2CA_OPEN_CHANNEL, 
 					OpenChannel, sizeof(_BRB_L2CA_OPEN_CHANNEL), OpenChannel, sizeof(_BRB_L2CA_OPEN_CHANNEL)));
+
+				status = 0;
 			}
 			else
 			{
@@ -195,9 +217,11 @@ NTSTATUS L2capSocket::Send(CDataPacket* packet)
 			acl->BufferSize = packet->getDataSize();
 			acl->Buffer = packet->getData();
 
-			status = Irp->CheckNtStatus(NtDeviceIoControlFile(hFile, 0, 0, Irp, Irp, IOCTL_L2CA_ACL_TRANSFER, 
+			Irp->CheckNtStatus(this, NtDeviceIoControlFile(hFile, 0, 0, Irp, Irp, IOCTL_L2CA_ACL_TRANSFER, 
 				acl, sizeof(_BRB_L2CA_ACL_TRANSFER), 
 				acl, sizeof(_BRB_L2CA_ACL_TRANSFER)));
+
+			status = 0;
 		}
 		UnlockHandle();
 	}
@@ -237,8 +261,10 @@ NTSTATUS L2capSocket::Recv(CDataPacket* packet)
 			acl->BufferSize = packet->getFreeSize();
 			acl->Buffer = packet->getFreeBuffer();
 
-			status = Irp->CheckNtStatus(NtDeviceIoControlFile(hFile, 0, 0, Irp, Irp, IOCTL_L2CA_ACL_TRANSFER, 
+			Irp->CheckNtStatus(this, NtDeviceIoControlFile(hFile, 0, 0, Irp, Irp, IOCTL_L2CA_ACL_TRANSFER, 
 				acl, sizeof(_BRB_L2CA_ACL_TRANSFER), acl, sizeof(_BRB_L2CA_ACL_TRANSFER)));
+
+			status = 0;
 		}
 
 		UnlockHandle();
